@@ -60,6 +60,63 @@ html, body, #root {
   opacity: 0.9;
 }
 
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.topbar-save {
+  padding: 7px 14px;
+  background: transparent;
+  color: #4a5a6a;
+  border: 1px solid #2a323d;
+  border-radius: 6px;
+  font-family: var(--sans);
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  min-width: 90px;
+}
+
+.topbar-save:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.topbar-save.dirty {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(255,176,32,0.08);
+}
+
+.topbar-save.dirty:hover:not(:disabled) {
+  background: rgba(255,176,32,0.15);
+}
+
+.topbar-save.saved {
+  color: #3cb371;
+  border-color: #3cb371;
+  background: rgba(60,179,113,0.08);
+}
+
+.topbar-save.error {
+  color: #c0392b;
+  border-color: #c0392b;
+  background: rgba(192,57,43,0.08);
+}
+
+.topbar-error-msg {
+  font-size: 11px;
+  color: #c0392b;
+  font-family: var(--mono);
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 #main-layout {
   display: flex;
   flex: 1;
@@ -112,4 +169,1030 @@ html, body, #root {
   margin: 8px 0;
   font-size: 13px;
   font-family: var(--mono);
+}
+
+/* ── Stat rows ────────────────────────────────────────────────────────────── */
+.stat-group {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.stat-group label {
+  color: #7a8a9a;
+}
+
+.stat-value {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text);
+}
+
+/* ── Section divider ──────────────────────────────────────────────────────── */
+.section-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 16px 0;
+}
+
+/* ── Buttons ──────────────────────────────────────────────────────────────── */
+.btn-primary {
+  width: 100%;
+  padding: 9px 14px;
+  background: var(--accent);
+  color: #1a1206;
+  border: none;
+  border-radius: 6px;
+  font-family: var(--sans);
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.btn-primary:hover:not(:disabled) { opacity: 0.88; }
+.btn-primary:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.btn-secondary {
+  width: 100%;
+  padding: 9px 14px;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--sans);
+  font-weight: 500;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.btn-secondary:hover:not(:disabled) { background: rgba(255,255,255,0.04); }
+.btn-secondary:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* ── Placement status bar ─────────────────────────────────────────────────── */
+.placing-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  margin-bottom: 14px;
+  background: rgba(255,176,32,0.1);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.cancel-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+/* ── Rack creation form ───────────────────────────────────────────────────── */
+.rack-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.form-field label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #7a8a9a;
+}
+
+.form-field input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 7px 10px;
+  width: 100%;
+  outline: none;
+}
+
+.form-field input:focus {
+  border-color: var(--accent);
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.form-hint {
+  font-size: 11px;
+  color: #4a5a6a;
+  margin: 0;
+  font-family: var(--mono);
+}
+
+.form-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ── Section label ────────────────────────────────────────────────────────── */
+.section-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #4a5a6a;
+  margin-bottom: 8px;
+}
+
+/* ── Warehouse rename rows ────────────────────────────────────────────────── */
+.wh-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.wh-code {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+  font-weight: 700;
+  min-width: 32px;
+}
+
+.wh-name-input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  padding: 6px 10px;
+  outline: none;
+}
+
+.wh-name-input:focus {
+  border-color: var(--accent);
+}
+
+/* ── Selected rack panel ──────────────────────────────────────────────────── */
+.selected-rack-panel {
+  background: rgba(255,176,32,0.06);
+  border: 1px solid rgba(255,176,32,0.25);
+  border-radius: 6px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.selected-rack-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.rack-id-badge {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.rack-id-input {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  background: transparent;
+  border: none;
+  border-bottom: 1px dashed rgba(255, 176, 32, 0.4);
+  border-radius: 0;
+  padding: 1px 2px;
+  width: 140px;
+  outline: none;
+  caret-color: var(--accent);
+}
+.rack-id-input:focus {
+  border-bottom-color: var(--accent);
+  background: rgba(255, 176, 32, 0.06);
+}
+
+.rack-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ── Toggle button (e.g. Rotate 90°) ─────────────────────────────────────── */
+.toggle-btn {
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: #7a8a9a;
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+}
+
+.toggle-btn:hover {
+  background: rgba(255,255,255,0.04);
+  color: var(--text);
+}
+
+.toggle-btn.active {
+  background: rgba(255,176,32,0.12);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ── Small icon button ────────────────────────────────────────────────────── */
+.icon-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: #4a5a6a;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 3px 7px;
+  line-height: 1;
+}
+
+.icon-btn.danger:hover {
+  border-color: #c0392b;
+  color: #c0392b;
+}
+
+/* ── Selected bin panel ───────────────────────────────────────────────────── */
+.selected-bin-panel {
+  background: rgba(176,128,80,0.08);
+  border: 1px solid rgba(176,128,80,0.3);
+  border-radius: 6px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.bin-id-badge {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: #c9945a;
+}
+
+.bin-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: #7a8a9a;
+}
+
+.rack-link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.rack-link:hover { opacity: 0.8; }
+
+.bin-contents-placeholder {
+  font-size: 11px;
+  color: #3a4a5a;
+  font-style: italic;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255,255,255,0.05);
+}
+
+/* ── Rack view panel header ──────────────────────────────────────────────── */
+.rack-view-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rack-view-nav {
+  margin-bottom: 2px;
+}
+
+.back-btn {
+  background: none;
+  border: none;
+  color: #7a8a9a;
+  font-family: var(--sans);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+
+.back-btn:hover { color: var(--text); }
+
+.rack-view-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.rack-view-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.rack-view-dims {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: #7a8a9a;
+}
+
+.rack-view-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.rack-action-btn {
+  width: auto !important;
+  padding: 4px 10px !important;
+  font-size: 12px !important;
+}
+
+/* ── Bin slot grid ────────────────────────────────────────────────────────── */
+.bin-grid {
+  display: grid;
+  gap: 3px;
+}
+
+.bin-cell {
+  aspect-ratio: 1;
+  min-height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(136, 136, 136, 0.14);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.1s;
+  overflow: hidden;
+}
+
+.bin-cell:hover:not(.empty) {
+  background: rgba(136, 136, 136, 0.28);
+}
+
+.bin-cell.selected {
+  background: rgba(255, 176, 32, 0.22);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.bin-cell.empty {
+  background: transparent;
+  border: 1px dashed #2a323d;
+  cursor: default;
+  color: #3a4a5a;
+}
+
+.empty-slot-label {
+  font-size: 14px;
+  line-height: 1;
+  color: #2a323d;
+}
+
+.bin-cell.moving {
+  background: rgba(68, 153, 255, 0.15);
+  border: 1px dashed #4499ff;
+  color: #4499ff;
+  cursor: default;
+}
+
+.bin-cell.move-target {
+  background: rgba(68, 153, 255, 0.1);
+  border: 1px dashed #4499ff;
+  cursor: pointer;
+}
+
+.bin-cell.move-target:hover {
+  background: rgba(68, 153, 255, 0.25);
+}
+
+.bin-cell.swap-target {
+  border-color: rgba(255, 176, 32, 0.5);
+  cursor: pointer;
+}
+
+.bin-cell.swap-target:hover {
+  background: rgba(255, 176, 32, 0.12);
+  border-color: var(--accent);
+}
+
+/* ── Confirmation modal ───────────────────────────────────────────────────── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 24px;
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.modal-card h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.modal-card p {
+  margin: 0;
+  font-size: 12px;
+  color: #7a8a9a;
+  line-height: 1.5;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.modal-actions .btn-secondary {
+  flex: 1;
+}
+
+.btn-danger {
+  flex: 1;
+  padding: 9px 14px;
+  background: #c0392b;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-family: var(--sans);
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.btn-danger:hover { opacity: 0.88; }
+
+/* ── Keyboard shortcuts hint ──────────────────────────────────────────────── */
+.shortcuts-hint {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: #4a5a6a;
+}
+
+/* ── kbd tag styling ──────────────────────────────────────────────────────── */
+kbd {
+  font-family: var(--mono);
+  font-size: 10px;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+  color: #7a8a9a;
+  flex-shrink: 0;
+}
+
+/* ── SKU list ─────────────────────────────────────────────────────────────── */
+.sku-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.sku-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+}
+
+.sku-code {
+  flex: 1;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sku-qty {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.sku-remove {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 11px;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: color 0.15s;
+}
+
+.sku-remove:hover { color: #c0392b; }
+
+/* ── SKU entry — qty group (inline editable input + "of N total") ──────────── */
+.sku-qty-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.sku-qty-input {
+  width: 48px;
+  text-align: center;
+  padding: 3px 5px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  -moz-appearance: textfield;
+}
+.sku-qty-input::-webkit-inner-spin-button,
+.sku-qty-input::-webkit-outer-spin-button { -webkit-appearance: none; }
+.sku-qty-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.sku-of-total {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* ── SKU autocomplete dropdown ───────────────────────────────────────────── */
+.sku-autocomplete {
+  position: relative;
+  margin-bottom: 0;
+}
+
+.sku-suggestions {
+  position: absolute;
+  top: calc(100% - 2px); /* overlap the input border slightly */
+  left: 0;
+  right: 0;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-top: none;
+  border-radius: 0 0 7px 7px;
+  max-height: 220px;
+  overflow-y: auto;
+  z-index: 100;
+}
+
+.sku-suggestion-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 7px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  transition: background 0.1s;
+}
+
+.sku-suggestion-item:last-child { border-bottom: none; }
+
+.sku-suggestion-item:hover,
+.sku-suggestion-item.active {
+  background: rgba(77, 140, 255, 0.15);
+}
+
+.suggestion-sku {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+}
+
+.suggestion-name {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── SKU add form ─────────────────────────────────────────────────────────── */
+.sku-add-row {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.sku-text-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.qty-input {
+  width: 52px;
+  text-align: center;
+}
+
+.sku-catalog-hint {
+  font-size: 11px;
+  color: var(--accent);
+  margin: 0 0 6px;
+  padding: 0;
+}
+
+.sku-add-btn {
+  width: auto;
+  flex: 1;
+  padding: 7px 10px !important;
+}
+
+.sku-scan-btn {
+  flex-shrink: 0;
+  padding: 6px 9px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.sku-scan-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.sku-error {
+  font-size: 11px;
+  color: #c0392b;
+  margin: 0;
+  padding: 2px 0;
+}
+
+/* ── CSV import label-button ─────────────────────────────────────────────── */
+.csv-import-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* ── Over-packing warning modal content ──────────────────────────────────── */
+.overpack-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0;
+}
+
+.overpack-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: rgba(192, 57, 43, 0.12);
+  border: 1px solid rgba(192, 57, 43, 0.3);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.overpack-detail {
+  font-size: 11px;
+  color: #e07060;
+}
+
+/* ── Barcode scanner overlay ─────────────────────────────────────────────── */
+.scanner-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.88);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+
+.scanner-modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  width: 340px;
+  display: flex;
+  flex-direction: column;
+}
+
+.scanner-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.scanner-close {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-family: var(--sans);
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.scanner-close:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.scanner-video-wrap {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  background: #000;
+}
+
+.scanner-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Targeting box — shows the user where to aim */
+.scanner-target {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 62%;
+  height: 32%;
+  border: 2px solid var(--accent);
+  border-radius: 5px;
+  pointer-events: none;
+}
+
+/* Animated scan line */
+.scanner-laser {
+  position: absolute;
+  left: 19%;
+  width: 62%;
+  height: 2px;
+  background: rgba(255, 176, 32, 0.7);
+  animation: scan-sweep 2s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes scan-sweep {
+  0%   { top: 34%; }
+  50%  { top: 66%; }
+  100% { top: 34%; }
+}
+
+.scanner-hint {
+  padding: 10px 16px;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+  margin: 0;
+}
+
+/* ── Panel nav buttons (Unassigned SKUs / Find a SKU) ────────────────────── */
+.panel-nav-btn {
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+}
+
+/* ── Catalog timestamp ───────────────────────────────────────────────────── */
+.catalog-timestamp {
+  font-size: 11px;
+  color: var(--accent);
+  margin: 0 0 8px;
+}
+
+/* ── Unassigned SKU panel ────────────────────────────────────────────────── */
+.unassigned-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.unassigned-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.unassigned-item:hover {
+  border-color: var(--accent);
+  background: rgba(77, 140, 255, 0.07);
+}
+
+.unassigned-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.unassigned-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: #e67e22;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.unassigned-name {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.unassigned-progress {
+  height: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.unassigned-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 0.3s;
+}
+
+.unassigned-ratio {
+  font-size: 10px;
+  color: #4a5a6a;
+}
+
+/* ── SKU Lookup panel ────────────────────────────────────────────────────── */
+.lookup-summary {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 4px;
+}
+
+.lookup-product-name {
+  font-size: 12px;
+  color: var(--text);
+  margin: 0 0 10px;
+  line-height: 1.4;
+}
+
+.lookup-stats-row {
+  display: flex;
+  gap: 0;
+}
+
+.lookup-stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-right: 10px;
+  border-right: 1px solid var(--border);
+  margin-right: 10px;
+}
+
+.lookup-stat:last-child {
+  border-right: none;
+  margin-right: 0;
+  padding-right: 0;
+}
+
+.lookup-stat-label {
+  font-size: 10px;
+  color: #4a5a6a;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.lookup-stat-value {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.lookup-bin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.lookup-bin-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+}
+
+.lookup-bin-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.lookup-bin-rack {
+  font-size: 10px;
+  color: #4a5a6a;
 }
