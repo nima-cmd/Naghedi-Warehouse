@@ -2,8 +2,11 @@ import { useState, useEffect, useRef } from 'react'
 import TopBar from './components/TopBar/TopBar'
 import Canvas from './components/Canvas/Canvas'
 import ControlPanel from './components/ControlPanel/ControlPanel'
+import StagingPanel from './components/Staging/StagingPanel'
 import { loadLayout, saveLayout } from './services/airtable'
 import { parseCatalogCsv, loadCatalog, saveCatalog } from './services/catalog'
+import { loadNetsuiteItems } from './services/netsuiteItems'
+import { loadContainers, saveContainers } from './services/containers'
 import './App.css'
 
 // Generate one bin record per rack slot.
@@ -65,6 +68,19 @@ function App() {
   const [placingRoom, setPlacingRoom] = useState(null)
   // Increment to force Canvas to remount when warehouse physical dimensions change
   const [dimChangeKey, setDimChangeKey] = useState(0)
+
+  // ── Staging module state ───────────────────────────────────────────────────
+  const [activeTab, setActiveTab]           = useState('warehouse')  // 'warehouse' | 'staging'
+  const [containers, setContainers]         = useState([])
+  const [netsuiteItems, setNetsuiteItems]   = useState(null)         // { itemsBySku, styleColorIndex }
+  const [netsuiteUpdatedAt, setNetsuiteUpdatedAt] = useState(null)
+
+  // ── Load staging data from localStorage on mount ─────────────────────────
+  useEffect(() => {
+    setContainers(loadContainers())
+    const ni = loadNetsuiteItems()
+    if (ni) { setNetsuiteItems(ni); setNetsuiteUpdatedAt(ni.updatedAt) }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Load layout from Airtable on mount ────────────────────────────────────
   useEffect(() => {
@@ -456,6 +472,39 @@ function App() {
   }
   const handleCancelDeleteBin = () => setDeletingBinId(null)
 
+  // ── Staging handlers ──────────────────────────────────────────────────────
+  const handleImportContainer = (parsed) => {
+    setContainers(prev => {
+      const next = [...prev.filter(c => c.id !== parsed.id), parsed]
+      saveContainers(next)
+      return next
+    })
+  }
+
+  const handleUpdateContainerBox = (containerId, boxId, updates) => {
+    setContainers(prev => {
+      const next = prev.map(c => {
+        if (c.id !== containerId) return c
+        return { ...c, boxes: c.boxes.map(b => b.id === boxId ? { ...b, ...updates } : b) }
+      })
+      saveContainers(next)
+      return next
+    })
+  }
+
+  const handleDeleteContainer = (id) => {
+    setContainers(prev => {
+      const next = prev.filter(c => c.id !== id)
+      saveContainers(next)
+      return next
+    })
+  }
+
+  const handleNetsuiteItemsUpdated = (data) => {
+    setNetsuiteItems(data)
+    setNetsuiteUpdatedAt(data.updatedAt)
+  }
+
   // ── Save layout to Airtable ───────────────────────────────────────────────
   const handleSave = async () => {
     setSaveStatus('saving')
@@ -526,7 +575,40 @@ function App() {
           </div>
         </div>
       )}
-      <div id="main-layout">
+      {/* ── Tab bar ── */}
+      <div className="tab-bar">
+        <button
+          className={`tab-btn${activeTab === 'warehouse' ? ' active' : ''}`}
+          onClick={() => setActiveTab('warehouse')}
+        >
+          Warehouse 3D
+        </button>
+        <button
+          className={`tab-btn${activeTab === 'staging' ? ' active' : ''}`}
+          onClick={() => setActiveTab('staging')}
+        >
+          Staging
+          {containers.length > 0 && (
+            <span className="tab-badge">{containers.length}</span>
+          )}
+        </button>
+      </div>
+
+      {/* ── Staging tab ── */}
+      {activeTab === 'staging' && (
+        <StagingPanel
+          containers={containers}
+          netsuiteItems={netsuiteItems}
+          netsuiteUpdatedAt={netsuiteUpdatedAt}
+          onImportContainer={handleImportContainer}
+          onUpdateBox={handleUpdateContainerBox}
+          onDeleteContainer={handleDeleteContainer}
+          onNetsuiteItemsUpdated={handleNetsuiteItemsUpdated}
+        />
+      )}
+
+      {/* ── Warehouse 3D tab ── */}
+      <div id="main-layout" style={{ display: activeTab === 'warehouse' ? 'flex' : 'none' }}>
         <div id="canvas-container" className="canvas-container">
           <Canvas
             key={dimChangeKey}
@@ -597,6 +679,7 @@ function App() {
           onSelectRoom={handleSelectRoom}
         />
       </div>
+
     </div>
   )
 }
