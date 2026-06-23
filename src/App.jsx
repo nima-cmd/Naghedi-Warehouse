@@ -30,8 +30,8 @@ function generateBinsForRack(rack) {
 
 function App() {
   const [warehouses, setWarehouses] = useState([
-    { code: 'WH1', name: 'Warehouse 1' },
-    { code: 'WH2', name: 'Warehouse 2' },
+    { code: 'WH1', name: 'Warehouse 1', width: 25, depth: 100 },
+    { code: 'WH2', name: 'Warehouse 2', width: 25, depth: 100 },
   ])
   const [racks, setRacks] = useState([])
   const [bins, setBins] = useState([])
@@ -57,6 +57,14 @@ function App() {
   const [catalogUpdatedAt, setCatalogUpdatedAt] = useState(null)
   // Pending over-packing warning: { items: [{sku, totalAfter, available}], proceed: fn }
   const [packingWarning, setPackingWarning] = useState(null)
+  // SKUs the user has manually confirmed as intentional shortages { [sku]: true }
+  const [confirmedShortages, setConfirmedShortages] = useState({})
+  // Space reservation placeholders (offices, bathrooms, etc.) on the warehouse floor
+  const [rooms, setRooms] = useState([])
+  const [selectedRoomId, setSelectedRoomId] = useState(null)
+  const [placingRoom, setPlacingRoom] = useState(null)
+  // Increment to force Canvas to remount when warehouse physical dimensions change
+  const [dimChangeKey, setDimChangeKey] = useState(0)
 
   // ── Load layout from Airtable on mount ────────────────────────────────────
   useEffect(() => {
@@ -66,14 +74,16 @@ function App() {
         if (result) {
           airtableRecordId.current = result.recordId
           const { layout } = result
-          setWarehouses(layout.warehouses ?? [
-            { code: 'WH1', name: 'Warehouse 1' },
-            { code: 'WH2', name: 'Warehouse 2' },
-          ])
+          setWarehouses((layout.warehouses ?? [
+            { code: 'WH1', name: 'Warehouse 1', width: 25, depth: 100 },
+            { code: 'WH2', name: 'Warehouse 2', width: 25, depth: 100 },
+          ]).map(wh => ({ width: 25, depth: 100, ...wh })))  // back-compat: add dims to old saves
           setRacks(layout.racks ?? [])
           setBins(layout.bins ?? [])
           setRackCounters(layout.rackCounters ?? { 0: 0, 1: 0 })
           setCatalogUpdatedAt(layout.catalogUpdatedAt ?? null)
+          setConfirmedShortages(layout.confirmedShortages ?? {})
+          setRooms(layout.rooms ?? [])
           // Load catalog via the catalog service (localStorage cache → Airtable fallback).
           // Also handles backward compat: old saves included skuCatalog in the layout blob.
           loadCatalog().then(result => {
@@ -96,13 +106,45 @@ function App() {
       })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Mark dirty whenever racks / bins / warehouse names change (after initial load)
+  // Mark dirty whenever racks / bins / warehouse names / rooms change (after initial load)
   useEffect(() => {
     if (initialLoadDone.current) setIsDirty(true)
-  }, [racks, bins, warehouses])
+  }, [racks, bins, warehouses, rooms])
 
   const handleUpdateWarehouseName = (index, name) => {
     setWarehouses(prev => prev.map((wh, i) => i === index ? { ...wh, name } : wh))
+  }
+
+  const handleUpdateWarehouseDims = (index, dims) => {
+    setWarehouses(prev => prev.map((wh, i) => i === index ? { ...wh, ...dims } : wh))
+    setDimChangeKey(k => k + 1)  // forces Canvas to remount with the new floor dimensions
+    setIsDirty(true)
+  }
+
+  const handleStartPlaceRoom = (config) => {
+    setSelectedRackId(null)
+    setSelectedBinId(null)
+    setSelectedRoomId(null)
+    setPlacingRoom(config)
+  }
+
+  const handleCancelPlaceRoom = () => setPlacingRoom(null)
+
+  const handlePlaceRoom = (whIndex, localX, localZ) => {
+    setRooms(prev => [...prev, { id: `room_${Date.now()}`, ...placingRoom, whIndex, localX, localZ }])
+    setPlacingRoom(null)
+    setIsDirty(true)
+  }
+
+  const handleDeleteRoom = (id) => {
+    setRooms(prev => prev.filter(r => r.id !== id))
+    if (selectedRoomId === id) setSelectedRoomId(null)
+    setIsDirty(true)
+  }
+
+  const handleSelectRoom = (id) => {
+    setSelectedRoomId(id)
+    if (id) { setSelectedRackId(null); setSelectedBinId(null) }
   }
 
   const handleStartPlaceRack = (config) => {
@@ -320,13 +362,14 @@ function App() {
   // If catalog is loaded and adding would exceed total on record, we intercept with a warning.
   const handleAddSku = (binId, sku, qty) => {
     const doAdd = () => {
+      const now = new Date().toISOString()
       setBins(prev => prev.map(b => {
         if (b.id !== binId) return b
         const skus = b.skus ?? []
         if (skus.some(s => s.sku === sku)) {
-          return { ...b, skus: skus.map(s => s.sku === sku ? { ...s, qty: s.qty + qty } : s) }
+          return { ...b, updatedAt: now, skus: skus.map(s => s.sku === sku ? { ...s, qty: s.qty + qty } : s) }
         }
-        return { ...b, skus: [...skus, { id: `${binId}_${sku}`, sku, qty }] }
+        return { ...b, updatedAt: now, skus: [...skus, { id: `${binId}_${sku}`, sku, qty }] }
       }))
     }
 
@@ -344,8 +387,9 @@ function App() {
   }
 
   const handleRemoveSku = (binId, skuId) => {
+    const now = new Date().toISOString()
     setBins(prev => prev.map(b =>
-      b.id === binId ? { ...b, skus: (b.skus ?? []).filter(s => s.id !== skuId) } : b
+      b.id === binId ? { ...b, updatedAt: now, skus: (b.skus ?? []).filter(s => s.id !== skuId) } : b
     ))
   }
 
@@ -355,9 +399,10 @@ function App() {
     if (!entry) return
 
     const doUpdate = () => {
+      const now = new Date().toISOString()
       setBins(prev => prev.map(b =>
         b.id === binId
-          ? { ...b, skus: (b.skus ?? []).map(s => s.id === skuId ? { ...s, qty: newQty } : s) }
+          ? { ...b, updatedAt: now, skus: (b.skus ?? []).map(s => s.id === skuId ? { ...s, qty: newQty } : s) }
           : b
       ))
     }
@@ -384,6 +429,26 @@ function App() {
     setIsDirty(true)
   }
 
+  const handleUpdateBinDimensions = (binId, dims) => {
+    setBins(prev => prev.map(b => b.id === binId ? { ...b, ...dims } : b))
+    setIsDirty(true)
+  }
+
+  const handleMarkLabelPrinted = (binId) => {
+    const now = new Date().toISOString()
+    setBins(prev => prev.map(b => b.id === binId ? { ...b, labelPrintedAt: now } : b))
+  }
+
+  const handleConfirmShortage = (sku) => {
+    setConfirmedShortages(prev => ({ ...prev, [sku]: true }))
+    setIsDirty(true)
+  }
+
+  const handleUnconfirmShortage = (sku) => {
+    setConfirmedShortages(prev => { const n = { ...prev }; delete n[sku]; return n })
+    setIsDirty(true)
+  }
+
   const handleRequestDeleteBin = (id) => setDeletingBinId(id)
   const handleConfirmDeleteBin = () => {
     if (deletingBinId) handleRemoveBin(deletingBinId)
@@ -398,7 +463,7 @@ function App() {
     try {
       // skuCatalog is excluded — it's too large for Airtable's text field.
       // It lives in localStorage and is restored from there on load.
-      const layout = { warehouses, racks, bins, rackCounters, catalogUpdatedAt }
+      const layout = { warehouses, racks, bins, rooms, rackCounters, catalogUpdatedAt, confirmedShortages }
       const recordId = await saveLayout(layout, airtableRecordId.current)
       airtableRecordId.current = recordId
       setIsDirty(false)
@@ -464,9 +529,15 @@ function App() {
       <div id="main-layout">
         <div id="canvas-container" className="canvas-container">
           <Canvas
+            key={dimChangeKey}
             warehouses={warehouses}
             racks={racks}
             bins={bins}
+            rooms={rooms}
+            selectedRoomId={selectedRoomId}
+            placingRoom={placingRoom}
+            onPlaceRoom={handlePlaceRoom}
+            onSelectRoom={handleSelectRoom}
             placingRack={placingRack}
             selectedRackId={selectedRackId}
             selectedBinId={selectedBinId}
@@ -508,9 +579,22 @@ function App() {
           onAddSku={handleAddSku}
           onRemoveSku={handleRemoveSku}
           onUpdateSkuQty={handleUpdateSkuQty}
+          onUpdateBinDimensions={handleUpdateBinDimensions}
+          onMarkLabelPrinted={handleMarkLabelPrinted}
           onImportCsv={handleImportCsv}
           skuCatalog={skuCatalog}
           catalogUpdatedAt={catalogUpdatedAt}
+          confirmedShortages={confirmedShortages}
+          onConfirmShortage={handleConfirmShortage}
+          onUnconfirmShortage={handleUnconfirmShortage}
+          onUpdateWarehouseDims={handleUpdateWarehouseDims}
+          rooms={rooms}
+          selectedRoomId={selectedRoomId}
+          placingRoom={placingRoom}
+          onStartPlaceRoom={handleStartPlaceRoom}
+          onCancelPlaceRoom={handleCancelPlaceRoom}
+          onDeleteRoom={handleDeleteRoom}
+          onSelectRoom={handleSelectRoom}
         />
       </div>
     </div>

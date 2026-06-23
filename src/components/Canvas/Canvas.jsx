@@ -86,12 +86,12 @@ function buildRackMesh(rack, ghost = false, selected = false) {
 }
 
 // Returns the label div element so it can be updated later
-function buildWarehouse(scene, offsetX, name, floorMeshes, whIndex) {
+function buildWarehouse(scene, offsetX, name, floorMeshes, whIndex, whW = W, whD = D) {
   const group = new THREE.Group()
   group.position.x = offsetX
 
   const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(W, D),
+    new THREE.PlaneGeometry(whW, whD),
     new THREE.MeshLambertMaterial({ color: 0x161b22 })
   )
   floor.rotation.x = -Math.PI / 2
@@ -99,7 +99,7 @@ function buildWarehouse(scene, offsetX, name, floorMeshes, whIndex) {
 
   // Invisible floor plane lives in WORLD space for accurate raycasting
   const hitPlane = new THREE.Mesh(
-    new THREE.PlaneGeometry(W, D),
+    new THREE.PlaneGeometry(whW, whD),
     new THREE.MeshBasicMaterial({ visible: false, side: THREE.DoubleSide })
   )
   hitPlane.rotation.x = -Math.PI / 2
@@ -109,20 +109,20 @@ function buildWarehouse(scene, offsetX, name, floorMeshes, whIndex) {
   floorMeshes.push(hitPlane)
 
   const gv = []
-  for (let x = 0; x <= W; x++) { gv.push(x-W/2,0.01,-D/2, x-W/2,0.01,D/2) }
-  for (let z = 0; z <= D; z++) { gv.push(-W/2,0.01,z-D/2, W/2,0.01,z-D/2) }
+  for (let x = 0; x <= whW; x++) { gv.push(x-whW/2,0.01,-whD/2, x-whW/2,0.01,whD/2) }
+  for (let z = 0; z <= whD; z++) { gv.push(-whW/2,0.01,z-whD/2, whW/2,0.01,z-whD/2) }
   const gGeo = new THREE.BufferGeometry()
   gGeo.setAttribute('position', new THREE.Float32BufferAttribute(gv, 3))
   group.add(new THREE.LineSegments(gGeo, new THREE.LineBasicMaterial({ color: 0x2a323d })))
 
   const mv = []
-  for (let x = 0; x <= W; x+=5) { mv.push(x-W/2,0.015,-D/2, x-W/2,0.015,D/2) }
-  for (let z = 0; z <= D; z+=5) { mv.push(-W/2,0.015,z-D/2, W/2,0.015,z-D/2) }
+  for (let x = 0; x <= whW; x+=5) { mv.push(x-whW/2,0.015,-whD/2, x-whW/2,0.015,whD/2) }
+  for (let z = 0; z <= whD; z+=5) { mv.push(-whW/2,0.015,z-whD/2, whW/2,0.015,z-whD/2) }
   const mGeo = new THREE.BufferGeometry()
   mGeo.setAttribute('position', new THREE.Float32BufferAttribute(mv, 3))
   group.add(new THREE.LineSegments(mGeo, new THREE.LineBasicMaterial({ color: 0x3d4f63 })))
 
-  const bv = [-W/2,0.02,-D/2, W/2,0.02,-D/2, W/2,0.02,D/2, -W/2,0.02,D/2, -W/2,0.02,-D/2]
+  const bv = [-whW/2,0.02,-whD/2, whW/2,0.02,-whD/2, whW/2,0.02,whD/2, -whW/2,0.02,whD/2, -whW/2,0.02,-whD/2]
   const bGeo = new THREE.BufferGeometry()
   bGeo.setAttribute('position', new THREE.Float32BufferAttribute(bv, 3))
   group.add(new THREE.Line(bGeo, new THREE.LineBasicMaterial({ color: 0xffb020 })))
@@ -131,24 +131,48 @@ function buildWarehouse(scene, offsetX, name, floorMeshes, whIndex) {
   div.textContent = name
   div.style.cssText = "color:#ffb020;font-family:'Space Grotesk',system-ui,sans-serif;font-size:13px;font-weight:600;background:rgba(14,17,22,.85);padding:4px 12px;border:1px solid #ffb020;border-radius:4px;pointer-events:none;white-space:nowrap"
   const label = new CSS2DObject(div)
-  label.position.set(0, 1, -D / 2 - 1)
+  label.position.set(0, 1, -whD / 2 - 1)
   group.add(label)
+
+  // ── Floor ruler labels ─────────────────────────────────────────────────────
+  // Depth (Z) axis: labels every 10 units along the left edge
+  const rulerStyle = "color:#3d4f63;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:9px;pointer-events:none;white-space:nowrap"
+  for (let z = -whD / 2; z <= whD / 2; z += 10) {
+    const d = document.createElement('div')
+    d.textContent = z === 0 ? '0' : (z > 0 ? `+${z}` : `${z}`)
+    d.style.cssText = rulerStyle
+    const lbl = new CSS2DObject(d)
+    lbl.position.set(-whW / 2 - 0.5, 0.1, z)
+    group.add(lbl)
+  }
+  // Width (X) axis: labels every 5 units along the front edge
+  for (let x = -whW / 2; x <= whW / 2; x += 5) {
+    const d = document.createElement('div')
+    d.textContent = x === 0 ? '0' : (x > 0 ? `+${x}` : `${x}`)
+    d.style.cssText = rulerStyle
+    const lbl = new CSS2DObject(d)
+    lbl.position.set(x, 0.1, whD / 2 + 0.5)
+    group.add(lbl)
+  }
 
   scene.add(group)
   return div  // returned so the name can be updated without rebuilding
 }
 
 // Build a single bin box mesh, positioned in local rack coordinates
-function buildBinMesh(bin, rack, selected = false, ghost = false) {
-  const bw = rack.binW ?? BIN.w
-  const bd = rack.binD ?? BIN.d
-  const bh = rack.binH ?? BIN.h
+function buildBinMesh(bin, rack, selected = false, ghost = false, hasContent = false) {
+  // Per-bin dimension overrides fall back to rack level, then global defaults
+  const bw = bin.binW ?? rack.binW ?? BIN.w
+  const bd = bin.binD ?? rack.binD ?? BIN.d
+  const bh = bin.binH ?? rack.binH ?? BIN.h
   const gap = 0.05
 
   const geo = new THREE.BoxGeometry(bd - gap * 2, bh - gap * 2, bw - gap * 2)
   const mat = ghost
     ? new THREE.MeshLambertMaterial({ color: 0x4499ff, transparent: true, opacity: 0.3 })
-    : new THREE.MeshLambertMaterial({ color: selected ? 0xffb020 : 0x888888 })
+    : new THREE.MeshLambertMaterial({
+        color: selected ? 0xffb020 : hasContent ? 0x1a5cb8 : 0x444444,
+      })
   const mesh = new THREE.Mesh(geo, mat)
 
   if (!rack.rotated) {
@@ -202,6 +226,11 @@ function Canvas({
   onMoveBin,
   onCancelMoveBin,
   onRequestDeleteBin,
+  rooms = [],
+  selectedRoomId,
+  placingRoom,
+  onPlaceRoom,
+  onSelectRoom,
 }) {
   const mountRef = useRef(null)
   const threeRef = useRef({})
@@ -240,6 +269,15 @@ function Canvas({
   useEffect(() => { selectedBinIdRef.current      = selectedBinId },      [selectedBinId])
   useEffect(() => { onRequestDeleteBinRef.current = onRequestDeleteBin }, [onRequestDeleteBin])
 
+  const roomsRef          = useRef(rooms)
+  const placingRoomRef    = useRef(placingRoom)
+  const onPlaceRoomRef    = useRef(onPlaceRoom)
+  const onSelectRoomRef   = useRef(onSelectRoom)
+  useEffect(() => { roomsRef.current         = rooms },        [rooms])
+  useEffect(() => { placingRoomRef.current   = placingRoom },  [placingRoom])
+  useEffect(() => { onPlaceRoomRef.current   = onPlaceRoom },  [onPlaceRoom])
+  useEffect(() => { onSelectRoomRef.current  = onSelectRoom }, [onSelectRoom])
+
   // ── Effect 1: One-time Three.js setup ───────────────────────────────────────
   useEffect(() => {
     const mount = mountRef.current
@@ -270,18 +308,25 @@ function Canvas({
     controls.maxPolarAngle = Math.PI / 2 - 0.05
 
     const floorMeshes = []
+    const w0 = warehouses[0]?.width ?? W
+    const w1 = warehouses[1]?.width ?? W
+    const d0 = warehouses[0]?.depth ?? D
+    const d1 = warehouses[1]?.depth ?? D
+    const whPos = [-(w0 / 2 + GAP / 2), (w1 / 2 + GAP / 2)]
     const warehouseLabelDivs = [
-      buildWarehouse(scene, WH_POS[0], warehouses[0]?.name ?? 'Warehouse 1', floorMeshes, 0),
-      buildWarehouse(scene, WH_POS[1], warehouses[1]?.name ?? 'Warehouse 2', floorMeshes, 1),
+      buildWarehouse(scene, whPos[0], warehouses[0]?.name ?? 'Warehouse 1', floorMeshes, 0, w0, d0),
+      buildWarehouse(scene, whPos[1], warehouses[1]?.name ?? 'Warehouse 2', floorMeshes, 1, w1, d1),
     ]
 
     const racksGroup = new THREE.Group()
     const ghostGroup = new THREE.Group()
     const displacedGroup = new THREE.Group()
+    const roomsGroup = new THREE.Group()
     ghostGroup.visible = false
     scene.add(racksGroup)
     scene.add(ghostGroup)
     scene.add(displacedGroup)
+    scene.add(roomsGroup)
 
     scene.add(new THREE.AmbientLight(0xffffff, 0.7))
     const sun = new THREE.DirectionalLight(0xffffff, 0.6)
@@ -297,10 +342,13 @@ function Canvas({
       mouse.y = -((e.clientY - rect.top)  / rect.height) * 2 + 1
     }
 
-    const snapAndClamp = (rawLocalX, rawZ, cfg) => {
-      const { extentX, extentZ } = getExtents(cfg)
-      const localX = Math.max(-W / 2, Math.min(Math.round(rawLocalX), W / 2 - extentX))
-      const localZ = Math.max(-D / 2, Math.min(Math.round(rawZ),      D / 2 - extentZ))
+    const snapAndClamp = (rawLocalX, rawZ, cfg, whIdx) => {
+      const thisW = whIdx === 0 ? w0 : w1
+      const thisD = whIdx === 0 ? d0 : d1
+      const extentX = cfg.roomW != null ? cfg.roomW : getExtents(cfg).extentX
+      const extentZ = cfg.roomD != null ? cfg.roomD : getExtents(cfg).extentZ
+      const localX = Math.max(-thisW / 2, Math.min(Math.round(rawLocalX), thisW / 2 - extentX))
+      const localZ = Math.max(-thisD / 2, Math.min(Math.round(rawZ),      thisD / 2 - extentZ))
       return { localX, localZ }
     }
 
@@ -310,9 +358,10 @@ function Canvas({
 
     const onMouseMove = (e) => {
       const cfg = placingRackRef.current
+      const room = placingRoomRef.current
       const movingBin = movingBinRef.current
-      mount.style.cursor = (cfg || movingBin) ? 'crosshair' : 'default'
-      if (!cfg) { ghostGroup.visible = false; return }
+      mount.style.cursor = (cfg || room || movingBin) ? 'crosshair' : 'default'
+      if (!cfg && !room) { ghostGroup.visible = false; return }
 
       updateMouse(e)
       raycaster.setFromCamera(mouse, camera)
@@ -321,11 +370,12 @@ function Canvas({
 
       const hit = hits[0]
       const whIndex = hit.object.userData.whIndex
+      const activePlacing = placingRackRef.current || placingRoomRef.current
       const { localX, localZ } = snapAndClamp(
-        hit.point.x - WH_POS[whIndex], hit.point.z, cfg
+        hit.point.x - whPos[whIndex], hit.point.z, activePlacing, whIndex
       )
       ghostGroup.visible = true
-      ghostGroup.position.set(WH_POS[whIndex] + localX, 0, localZ)
+      ghostGroup.position.set(whPos[whIndex] + localX, 0, localZ)
     }
 
     const onClick = (e) => {
@@ -347,9 +397,17 @@ function Canvas({
         const hit = hits[0]
         const whIndex = hit.object.userData.whIndex
         const { localX, localZ } = snapAndClamp(
-          hit.point.x - WH_POS[whIndex], hit.point.z, cfg
+          hit.point.x - whPos[whIndex], hit.point.z, cfg, whIndex
         )
         onPlaceRackRef.current?.(whIndex, localX, localZ)
+      } else if (placingRoomRef.current) {
+        const hits = raycaster.intersectObjects(floorMeshes)
+        if (!hits.length) return
+        const hit = hits[0]
+        const whIndex = hit.object.userData.whIndex
+        const roomCfg = placingRoomRef.current
+        const { localX, localZ } = snapAndClamp(hit.point.x - whPos[whIndex], hit.point.z, roomCfg, whIndex)
+        onPlaceRoomRef.current?.(whIndex, localX, localZ)
       } else {
         // ── Select mode: bins take priority over rack frames ──────────────────
         // Raycast recursively (hits bins and rack posts/rails)
@@ -385,12 +443,19 @@ function Canvas({
           if (dispHits.length && dispHits[0].object.userData.binId && !movingBinRef.current) {
             onSelectBinRef.current?.(dispHits[0].object.userData.binId)
           } else {
-            // Clicked empty floor → deselect and cancel any move
-            const floorHit = raycaster.intersectObjects(floorMeshes)
-            if (floorHit.length) {
-              onSelectRackRef.current?.(null)
-              onSelectBinRef.current?.(null)
-              if (movingBinRef.current) onCancelMoveBinRef.current?.()
+            // Check rooms
+            const roomHits = raycaster.intersectObjects(roomsGroup.children, true)
+            if (roomHits.length && roomHits[0].object.userData.roomId && !movingBinRef.current) {
+              onSelectRoomRef.current?.(roomHits[0].object.userData.roomId)
+            } else {
+              // Clicked empty floor → deselect and cancel any move
+              const floorHit = raycaster.intersectObjects(floorMeshes)
+              if (floorHit.length) {
+                onSelectRackRef.current?.(null)
+                onSelectBinRef.current?.(null)
+                onSelectRoomRef.current?.(null)
+                if (movingBinRef.current) onCancelMoveBinRef.current?.()
+              }
             }
           }
         }
@@ -456,7 +521,7 @@ function Canvas({
       if (!rack) return
       const { extentX, extentZ } = getExtents(rack)
       const bh = rack.binH ?? BIN.h
-      const cx = WH_POS[rack.whIndex] + rack.localX + extentX / 2
+      const cx = whPos[rack.whIndex] + rack.localX + extentX / 2
       const cy = (rack.rows * bh) / 2
       const cz = rack.localZ + extentZ / 2
       const maxDim = Math.max(extentX, extentZ, rack.rows * bh, 4)
@@ -499,9 +564,9 @@ function Canvas({
 
     threeRef.current = {
       scene, camera, renderer, labelRenderer, controls,
-      racksGroup, ghostGroup, displacedGroup, floorMeshes,
+      racksGroup, ghostGroup, displacedGroup, roomsGroup, floorMeshes,
       warehouseLabelDivs, rackMeshMap: new Map(),
-      focusOnRack,
+      focusOnRack, whPos,
     }
 
     return () => {
@@ -547,7 +612,8 @@ function Canvas({
     for (const rack of racks) {
       const isSelected = rack.id === selectedRackId
       const mesh = buildRackMesh(rack, false, isSelected)
-      mesh.position.set(WH_POS[rack.whIndex] + rack.localX, 0, rack.localZ)
+      const rWhPos = (threeRef.current.whPos ?? WH_POS)[rack.whIndex]
+      mesh.position.set(rWhPos + rack.localX, 0, rack.localZ)
       mesh.userData.rackId = rack.id
       racksGroup.add(mesh)
       rackMeshMap?.set(rack.id, mesh)
@@ -557,9 +623,10 @@ function Canvas({
       const occupiedSlots = new Set(rackBins.map(b => `${b.col}_${b.row}`))
 
       for (const bin of rackBins) {
-        const isSelected = bin.id === selectedBinId
-        const isMoving = bin.id === movingBinId
-        const binMesh = buildBinMesh(bin, rack, isSelected, isMoving)
+        const isSelected  = bin.id === selectedBinId
+        const isMoving    = bin.id === movingBinId
+        const hasContent  = (bin.skus ?? []).length > 0
+        const binMesh = buildBinMesh(bin, rack, isSelected, isMoving, hasContent)
         binMesh.userData.binId    = bin.id
         binMesh.userData.binRackId = bin.rackId
         binMesh.userData.binCol   = bin.col
@@ -632,7 +699,7 @@ function Canvas({
 
           const geo = new THREE.BoxGeometry(BIN.d * 0.88, BIN.h * 0.88, BIN.w * 0.88)
           const mat = new THREE.MeshLambertMaterial({
-            color:       isSelected ? 0xffb020 : isMoving ? 0x4499ff : 0xc05218,
+            color:       isSelected ? 0xffb020 : isMoving ? 0x4499ff : 0xc0392b,
             transparent: isMoving,
             opacity:     isMoving ? 0.5 : 1,
           })
@@ -679,17 +746,85 @@ function Canvas({
     if (!ghostGroup) return
 
     clearGroup(ghostGroup)
-    if (mountRef.current) {
-      mountRef.current.style.cursor = placingRack ? 'crosshair' : 'default'
-    }
+    if (mountRef.current) mountRef.current.style.cursor = (placingRack || placingRoom) ? 'crosshair' : 'default'
 
     if (placingRack) {
       ghostGroup.add(buildRackMesh(placingRack, true))
       ghostGroup.visible = false
+    } else if (placingRoom) {
+      const geo = new THREE.PlaneGeometry(placingRoom.roomW, placingRoom.roomD)
+      const mat = new THREE.MeshLambertMaterial({ color: 0x4499ff, transparent: true, opacity: 0.4, side: THREE.DoubleSide })
+      const planeMesh = new THREE.Mesh(geo, mat)
+      planeMesh.rotation.x = -Math.PI / 2
+      planeMesh.position.set(placingRoom.roomW / 2, 0.03, placingRoom.roomD / 2)
+      ghostGroup.add(planeMesh)
+      ghostGroup.visible = false
     } else {
       ghostGroup.visible = false
     }
-  }, [placingRack])
+  }, [placingRack, placingRoom])
+
+  // ── Effect 5: Rebuild room meshes ────────────────────────────────────────────
+  useEffect(() => {
+    const { roomsGroup, whPos: currentWhPos } = threeRef.current
+    if (!roomsGroup) return
+    clearGroup(roomsGroup)
+
+    const ROOM_COLORS = {
+      office:   0x1a5cb8,
+      bathroom: 0x16a085,
+      snack:    0xe67e22,
+      storage:  0x8e44ad,
+      other:    0x607080,
+    }
+
+    for (const room of rooms) {
+      const pos = (currentWhPos ?? WH_POS)[room.whIndex]
+      const isSelected = room.id === selectedRoomId
+      const color = ROOM_COLORS[room.type] ?? ROOM_COLORS.other
+
+      const rg = new THREE.Group()
+      rg.position.set(pos + room.localX + room.roomW / 2, 0, room.localZ + room.roomD / 2)
+
+      const geo = new THREE.PlaneGeometry(room.roomW, room.roomD)
+      const mat = new THREE.MeshLambertMaterial({
+        color: isSelected ? 0xffb020 : color,
+        transparent: true,
+        opacity: isSelected ? 0.6 : 0.4,
+        side: THREE.DoubleSide,
+      })
+      const planeMesh = new THREE.Mesh(geo, mat)
+      planeMesh.rotation.x = -Math.PI / 2
+      planeMesh.position.y = 0.03
+      planeMesh.userData.roomId = room.id
+      rg.add(planeMesh)
+
+      const bv = new Float32Array([
+        -room.roomW/2, 0.05, -room.roomD/2,
+         room.roomW/2, 0.05, -room.roomD/2,
+         room.roomW/2, 0.05,  room.roomD/2,
+        -room.roomW/2, 0.05,  room.roomD/2,
+        -room.roomW/2, 0.05, -room.roomD/2,
+      ])
+      const bGeo = new THREE.BufferGeometry()
+      bGeo.setAttribute('position', new THREE.BufferAttribute(bv, 3))
+      rg.add(new THREE.Line(bGeo, new THREE.LineBasicMaterial({ color: isSelected ? 0xffb020 : color })))
+
+      const div = document.createElement('div')
+      div.textContent = room.name || room.type
+      div.style.cssText = [
+        isSelected ? 'color:#1a1206;background:rgba(255,176,32,.95)' : 'color:#fff;background:rgba(14,17,22,.85)',
+        "font-family:'Space Grotesk',system-ui,sans-serif",
+        'font-size:10px;font-weight:600',
+        'padding:2px 8px;border-radius:3px;pointer-events:none;white-space:nowrap',
+      ].join(';')
+      const lbl = new CSS2DObject(div)
+      lbl.position.set(0, 0.4, 0)
+      rg.add(lbl)
+
+      roomsGroup.add(rg)
+    }
+  }, [rooms, selectedRoomId])
 
   return <div ref={mountRef} style={{ width: '100%', height: '100%', position: 'relative' }} />
 }

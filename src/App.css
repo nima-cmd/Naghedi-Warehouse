@@ -142,6 +142,8 @@ html, body, #root {
   transition: transform 0.2s;
   overflow-y: auto;
   flex-shrink: 0;
+  position: relative;
+  z-index: 1;
 }
 
 .panel.hidden {
@@ -293,9 +295,9 @@ html, body, #root {
 }
 
 .form-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
   gap: 10px;
+  align-items: flex-start;
 }
 
 .form-hint {

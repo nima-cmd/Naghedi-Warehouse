@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import BarcodeScanner from '../BarcodeScanner/BarcodeScanner'
+import BinLabel from '../BinLabel/BinLabel'
 
 const DEFAULT_FORM = { cols: 5, rows: 6, rotated: false }
 
@@ -22,6 +23,11 @@ function ControlPanel({
   onRequestDeleteBin,
   onAddSku, onRemoveSku, onUpdateSkuQty,
   onImportCsv, skuCatalog, catalogUpdatedAt,
+  confirmedShortages, onConfirmShortage, onUnconfirmShortage,
+  onUpdateBinDimensions, onMarkLabelPrinted,
+  onUpdateWarehouseDims,
+  rooms = [], selectedRoomId, placingRoom,
+  onStartPlaceRoom, onCancelPlaceRoom, onDeleteRoom, onSelectRoom,
 }) {
   const [addingRack, setAddingRack] = useState(false)
   const [form, setForm] = useState(DEFAULT_FORM)
@@ -47,6 +53,16 @@ function ControlPanel({
 
   // Editable rack label (rackId) draft — committed on blur / Enter
   const [rackIdDraft, setRackIdDraft] = useState('')
+  const [labelBin, setLabelBin] = useState(null)
+  // Controlled inputs for bin box dimensions (in inches); synced to selected bin on navigation
+  const [dimInputs, setDimInputs] = useState({ binW: '24', binD: '16', binH: '17' })
+  // Warehouse dimension editing: pending confirmation { index, newWidth, newDepth }
+  const [dimConfirm, setDimConfirm] = useState(null)
+  // Per-warehouse dim inputs (width and depth in feet, integers)
+  const [whDimInputs, setWhDimInputs] = useState({})
+  // Room placement form state
+  const [addingRoom, setAddingRoom] = useState(false)
+  const [roomForm, setRoomForm] = useState({ name: '', type: 'other', roomW: 5, roomD: 5 })
 
   // SKU Lookup panel state
   const [lookupInput, setLookupInput] = useState('')
@@ -69,7 +85,14 @@ function ControlPanel({
     setEditingQtys({})
     setShowSuggestions(false)
     setActiveSuggestion(-1)
-  }, [selectedBinId])
+    const bin = bins.find(b => b.id === selectedBinId)
+    const rack = bin ? racks.find(r => r.id === bin.rackId) : null
+    setDimInputs({
+      binW: String(Math.round((bin?.binW ?? rack?.binW ?? 2)       * 12 * 10) / 10),
+      binD: String(Math.round((bin?.binD ?? rack?.binD ?? (4/3))   * 12 * 10) / 10),
+      binH: String(Math.round((bin?.binH ?? rack?.binH ?? (17/12)) * 12 * 10) / 10),
+    })
+  }, [selectedBinId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Read a CSV file from disk and hand the raw text to the parent handler
   const handleCsvFile = (e) => {
@@ -101,6 +124,15 @@ function ControlPanel({
       setPanelRackId(null)
     }
   }, [selectedRackId])
+
+  // External room selection (3D room click) → navigate to room view
+  useEffect(() => {
+    if (selectedRoomId && viewRef.current !== 'room') {
+      setView('room')
+    } else if (!selectedRoomId && viewRef.current === 'room') {
+      setView('main')
+    }
+  }, [selectedRoomId])
 
   // External bin selection (3D bin click) → navigate to bin view
   useEffect(() => {
@@ -298,6 +330,34 @@ function ControlPanel({
       .map(([sku, entry]) => ({ sku, name: entry?.name ?? '' }))
   }, [lookupInput, skuCatalog])
 
+  // Overpacked: assigned > catalog qty (excess shown in red)
+  // Underpacked: assigned < catalog qty (shortage, with confirm button)
+  const discrepancyData = useMemo(() => {
+    if (Object.keys(skuCatalog ?? {}).length === 0) return { overpacked: [], underpacked: [] }
+    const overpacked = []
+    const underpacked = []
+    for (const [sku, entry] of Object.entries(skuCatalog ?? {})) {
+      const totalAssigned = bins.reduce((sum, b) =>
+        sum + (b.skus ?? []).filter(s => s.sku === sku).reduce((s2, e) => s2 + e.qty, 0), 0)
+      const catalogQty = entry?.qty ?? 0
+      if (totalAssigned > catalogQty) {
+        overpacked.push({ sku, name: entry?.name ?? '', assigned: totalAssigned, catalogQty, excess: totalAssigned - catalogQty })
+      } else if (totalAssigned < catalogQty) {
+        underpacked.push({ sku, name: entry?.name ?? '', assigned: totalAssigned, catalogQty, shortage: catalogQty - totalAssigned, confirmed: !!confirmedShortages?.[sku] })
+      }
+    }
+    overpacked.sort((a, b) => b.excess - a.excess)
+    underpacked.sort((a, b) => a.confirmed !== b.confirmed ? (a.confirmed ? 1 : -1) : b.shortage - a.shortage)
+    return { overpacked, underpacked }
+  }, [skuCatalog, bins, confirmedShortages])
+
+  // Bins where content was edited more recently than the last printed label
+  const labelsNeeded = useMemo(() =>
+    bins
+      .filter(b => b.updatedAt && (!b.labelPrintedAt || b.updatedAt > b.labelPrintedAt))
+      .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))
+  , [bins])
+
   // ── Lookup panel handlers ─────────────────────────────────────────────────
 
   const handleLookupSearch = (code) => {
@@ -400,17 +460,56 @@ function ControlPanel({
             <div className="section-divider" />
 
             <div className="section-label">Warehouses</div>
-            {warehouses.map((wh, i) => (
-              <div key={wh.code} className="wh-row">
-                <span className="wh-code">{wh.code}</span>
-                <input
-                  className="wh-name-input"
-                  type="text"
-                  value={wh.name}
-                  onChange={e => onUpdateWarehouseName(i, e.target.value)}
-                />
-              </div>
-            ))}
+            {warehouses.map((wh, i) => {
+              const wKey = `${wh.code}_w`
+              const dKey = `${wh.code}_d`
+              const wVal = whDimInputs[wKey] ?? String(wh.width ?? 25)
+              const dVal = whDimInputs[dKey] ?? String(wh.depth ?? 100)
+              return (
+                <div key={wh.code} style={{ marginBottom: 10 }}>
+                  <div className="wh-row">
+                    <span className="wh-code">{wh.code}</span>
+                    <input
+                      className="wh-name-input"
+                      type="text"
+                      value={wh.name}
+                      onChange={e => onUpdateWarehouseName(i, e.target.value)}
+                    />
+                  </div>
+                  <div className="form-row" style={{ marginTop: 4 }}>
+                    <div className="form-field" style={{ flex: 1 }}>
+                      <label style={{ fontSize: 10 }}>Width (ft)</label>
+                      <input
+                        type="number" min="5" max="200" step="1" style={{ fontSize: 11 }}
+                        value={wVal}
+                        onChange={e => setWhDimInputs(p => ({ ...p, [wKey]: e.target.value }))}
+                      />
+                    </div>
+                    <div className="form-field" style={{ flex: 1 }}>
+                      <label style={{ fontSize: 10 }}>Depth (ft)</label>
+                      <input
+                        type="number" min="5" max="500" step="1" style={{ fontSize: 11 }}
+                        value={dVal}
+                        onChange={e => setWhDimInputs(p => ({ ...p, [dKey]: e.target.value }))}
+                      />
+                    </div>
+                    <div className="form-field" style={{ flex: 'none', alignSelf: 'flex-end' }}>
+                      <button
+                        className="btn-secondary"
+                        style={{ fontSize: 11, padding: '4px 8px', width: 'auto' }}
+                        onClick={() => {
+                          const newW = Math.max(5, Math.round(Number(wVal) || (wh.width ?? 25)))
+                          const newD = Math.max(5, Math.round(Number(dVal) || (wh.depth ?? 100)))
+                          setDimConfirm({ index: i, whCode: wh.code, newWidth: newW, newDepth: newD })
+                        }}
+                      >
+                        Apply
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
             <div style={{ height: 8 }} />
             <button
               className="btn-primary panel-nav-btn"
@@ -428,6 +527,130 @@ function ControlPanel({
                   SKUs to be Packed ({unassignedSkus.length})
                 </button>
               </>
+            )}
+            {(discrepancyData.overpacked.length > 0 || discrepancyData.underpacked.length > 0) && (
+              <>
+                <div style={{ height: 6 }} />
+                <button
+                  className="btn-secondary panel-nav-btn"
+                  style={discrepancyData.overpacked.length > 0 ? { borderColor: '#c0392b' } : {}}
+                  onClick={() => setView('discrepancy')}
+                >
+                  Inventory Discrepancy ({discrepancyData.overpacked.length + discrepancyData.underpacked.length})
+                </button>
+              </>
+            )}
+            {labelsNeeded.length > 0 && (
+              <>
+                <div style={{ height: 6 }} />
+                <button
+                  className="btn-secondary panel-nav-btn"
+                  onClick={() => setView('labels-needed')}
+                >
+                  Labels Needed ({labelsNeeded.length})
+                </button>
+              </>
+            )}
+
+            <div className="section-divider" />
+
+            {/* ── Spaces (room placeholders) ── */}
+            <div className="section-label">Spaces</div>
+            {rooms.length > 0 && (
+              <div className="unassigned-list" style={{ marginBottom: 8 }}>
+                {rooms.map(room => (
+                  <div
+                    key={room.id}
+                    className={`unassigned-item${room.id === selectedRoomId ? ' selected' : ''}`}
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => { onSelectRoom(room.id); setView('room') }}
+                  >
+                    <div className="unassigned-item-row">
+                      <span className="sku-code" style={{ fontSize: 11 }}>{room.name || '—'}</span>
+                      <span className="unassigned-badge" style={{ textTransform: 'capitalize' }}>{room.type}</span>
+                    </div>
+                    <span className="unassigned-ratio">
+                      WH{room.whIndex + 1} · {room.roomW}×{room.roomD} ft
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {rooms.length === 0 && <p className="form-hint" style={{ marginBottom: 8 }}>No spaces added yet.</p>}
+
+            {placingRoom && (
+              <div className="placing-status" style={{ borderColor: '#1a5cb8', marginBottom: 8 }}>
+                <span style={{ color: '#1a5cb8' }}>Placing <strong>{placingRoom.name || placingRoom.type}</strong> — click floor</span>
+                <button className="cancel-btn" onClick={onCancelPlaceRoom}>✕</button>
+              </div>
+            )}
+
+            {!addingRoom && !placingRoom && (
+              <button className="btn-secondary" style={{ marginBottom: 4 }} onClick={() => setAddingRoom(true)}>
+                + Add Space
+              </button>
+            )}
+
+            {addingRoom && (
+              <div className="rack-form" style={{ marginBottom: 8 }}>
+                <div className="form-field" style={{ marginBottom: 6 }}>
+                  <label>Name</label>
+                  <input
+                    className="form-input"
+                    type="text"
+                    placeholder="e.g. Main Office"
+                    value={roomForm.name}
+                    onChange={e => setRoomForm(f => ({ ...f, name: e.target.value }))}
+                    autoFocus
+                  />
+                </div>
+                <div className="form-field" style={{ marginBottom: 6 }}>
+                  <label>Type</label>
+                  <select
+                    className="form-input"
+                    value={roomForm.type}
+                    onChange={e => setRoomForm(f => ({ ...f, type: e.target.value }))}
+                    style={{ background: 'var(--panel)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 4, padding: '5px 8px', width: '100%', fontSize: 12 }}
+                  >
+                    <option value="office">Office</option>
+                    <option value="bathroom">Bathroom</option>
+                    <option value="snack">Snack Room</option>
+                    <option value="storage">Storage</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+                <div className="form-row">
+                  <div className="form-field">
+                    <label>Width (ft)</label>
+                    <input
+                      type="number" min="1" max="50" step="1"
+                      value={roomForm.roomW}
+                      onChange={e => setRoomForm(f => ({ ...f, roomW: Number(e.target.value) || 5 }))}
+                    />
+                  </div>
+                  <div className="form-field">
+                    <label>Depth (ft)</label>
+                    <input
+                      type="number" min="1" max="50" step="1"
+                      value={roomForm.roomD}
+                      onChange={e => setRoomForm(f => ({ ...f, roomD: Number(e.target.value) || 5 }))}
+                    />
+                  </div>
+                </div>
+                <div className="form-actions">
+                  <button
+                    className="btn-primary"
+                    onClick={() => {
+                      onStartPlaceRoom({ ...roomForm })
+                      setAddingRoom(false)
+                      setRoomForm({ name: '', type: 'other', roomW: 5, roomD: 5 })
+                    }}
+                  >
+                    Start Placing →
+                  </button>
+                  <button className="btn-secondary" onClick={() => setAddingRoom(false)}>Cancel</button>
+                </div>
+              </div>
             )}
 
             <div className="section-divider" />
@@ -762,6 +985,43 @@ function ControlPanel({
 
                 <div className="section-divider" />
 
+                <div className="section-label">Box Dimensions</div>
+                <div className="form-row" style={{ marginBottom: 4 }}>
+                  {[
+                    { key: 'binW', label: 'W (in)', def: 2 },
+                    { key: 'binD', label: 'D (in)', def: 4 / 3 },
+                    { key: 'binH', label: 'H (in)', def: 17 / 12 },
+                  ].map(({ key, label, def }) => {
+                    const isOverridden = selectedBin[key] != null
+                    return (
+                      <div key={key} className="form-field" style={{ flex: 1 }}>
+                        <label style={{ fontSize: 10 }}>{label}</label>
+                        <input
+                          type="number"
+                          min="1"
+                          step="1"
+                          style={{ fontSize: 11, color: isOverridden ? 'var(--text)' : 'var(--text-dim)' }}
+                          value={dimInputs[key] ?? ''}
+                          onChange={e => setDimInputs(prev => ({ ...prev, [key]: e.target.value }))}
+                          onBlur={() => {
+                            const inches = parseFloat(dimInputs[key])
+                            if (!isNaN(inches) && inches > 0)
+                              onUpdateBinDimensions(selectedBin.id, { [key]: inches / 12 })
+                          }}
+                          onKeyDown={e => e.key === 'Enter' && e.target.blur()}
+                        />
+                      </div>
+                    )
+                  })}
+                </div>
+                <p className="form-hint" style={{ marginBottom: 4 }}>
+                  {(selectedBin.binW != null || selectedBin.binD != null || selectedBin.binH != null)
+                    ? 'Custom · overrides rack default'
+                    : 'Rack default · edit to override'}
+                </p>
+
+                <div className="section-divider" />
+
                 <div className="section-label">Contents</div>
 
                 {/* SKU list — each entry has an editable qty and shows "of Y total" when catalog is loaded */}
@@ -877,22 +1137,31 @@ function ControlPanel({
                 <div className="section-divider" />
 
                 {!movingBinId && (
-                  <div className="rack-actions">
+                  <>
                     <button
                       className="btn-secondary"
-                      style={selectedBin.displaced ? { borderColor: '#c05218', color: '#c05218' } : {}}
-                      onClick={handleMoveBinFromBinView}
+                      style={{ marginBottom: 8 }}
+                      onClick={() => setLabelBin(selectedBin)}
                     >
-                      {selectedBin.displaced ? '↗ Assign to Rack' : '↑ Move Bin'}
+                      Print Label
                     </button>
-                    <button
-                      className="btn-secondary"
-                      style={{ borderColor: '#c0392b', color: '#c0392b' }}
-                      onClick={() => onRequestDeleteBin(selectedBin.id)}
-                    >
-                      Remove Bin
-                    </button>
-                  </div>
+                    <div className="rack-actions">
+                      <button
+                        className="btn-secondary"
+                        style={selectedBin.displaced ? { borderColor: '#c05218', color: '#c05218' } : {}}
+                        onClick={handleMoveBinFromBinView}
+                      >
+                        {selectedBin.displaced ? '↗ Assign to Rack' : '↑ Move Bin'}
+                      </button>
+                      <button
+                        className="btn-secondary"
+                        style={{ borderColor: '#c0392b', color: '#c0392b' }}
+                        onClick={() => onRequestDeleteBin(selectedBin.id)}
+                      >
+                        Remove Bin
+                      </button>
+                    </div>
+                  </>
                 )}
               </>
             )}
@@ -1175,6 +1444,246 @@ function ControlPanel({
             )}
           </div>
         </>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════
+          ROOM VIEW — Selected space placeholder details
+      ═══════════════════════════════════════════════════════════ */}
+      {view === 'room' && (() => {
+        const room = rooms.find(r => r.id === selectedRoomId) ?? null
+        const LABELS = { office: 'Office', bathroom: 'Bathroom', snack: 'Snack Room', storage: 'Storage', other: 'Space' }
+        return (
+          <>
+            <div className="panel-header rack-view-header">
+              <div className="rack-view-nav">
+                <button className="back-btn" onClick={() => { setView('main'); onSelectRoom(null) }}>← Warehouse Editor</button>
+              </div>
+              <div className="rack-view-title-row">
+                <span className="bin-id-badge" style={{ fontSize: 13 }}>{room?.name || LABELS[room?.type] || 'Space'}</span>
+              </div>
+            </div>
+            <div className="panel-content">
+              {room ? (
+                <>
+                  <div className="section-label">Details</div>
+                  <div className="stat-group">
+                    <label>Type</label>
+                    <span className="stat-value" style={{ textTransform: 'capitalize' }}>{LABELS[room.type] ?? room.type}</span>
+                  </div>
+                  <div className="stat-group">
+                    <label>Warehouse</label>
+                    <span className="stat-value">WH{room.whIndex + 1}</span>
+                  </div>
+                  <div className="stat-group">
+                    <label>Dimensions</label>
+                    <span className="stat-value">{room.roomW} × {room.roomD} ft</span>
+                  </div>
+                  <div className="section-divider" />
+                  <button
+                    className="btn-secondary"
+                    style={{ borderColor: '#c0392b', color: '#c0392b' }}
+                    onClick={() => { onDeleteRoom(room.id); setView('main') }}
+                  >
+                    Remove Space
+                  </button>
+                </>
+              ) : (
+                <p className="form-hint" style={{ paddingTop: 8 }}>Space not found.</p>
+              )}
+            </div>
+          </>
+        )
+      })()}
+
+      {/* ═══════════════════════════════════════════════════════════
+          DISCREPANCY VIEW — Overpacked / shortage SKUs
+      ═══════════════════════════════════════════════════════════ */}
+      {view === 'discrepancy' && (
+        <>
+          <div className="panel-header rack-view-header">
+            <div className="rack-view-nav">
+              <button className="back-btn" onClick={() => setView('main')}>← Warehouse Editor</button>
+            </div>
+            <div className="rack-view-title-row">
+              <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Inventory Discrepancy</h2>
+            </div>
+          </div>
+          <div className="panel-content">
+            {discrepancyData.overpacked.length === 0 && discrepancyData.underpacked.length === 0 ? (
+              <p className="form-hint" style={{ paddingTop: 8 }}>No discrepancies found.</p>
+            ) : (
+              <>
+                {discrepancyData.overpacked.length > 0 && (
+                  <>
+                    <div className="section-label" style={{ color: '#c0392b' }}>
+                      Overpacked ({discrepancyData.overpacked.length})
+                    </div>
+                    <p className="form-hint" style={{ marginBottom: 8 }}>More units in bins than catalog record</p>
+                    <div className="unassigned-list">
+                      {discrepancyData.overpacked.map(item => (
+                        <div key={item.sku} className="unassigned-item">
+                          <div className="unassigned-item-row">
+                            <span className="sku-code">{item.sku}</span>
+                            <span className="unassigned-badge" style={{ background: '#c0392b', color: '#fff' }}>
+                              +{item.excess.toLocaleString()} extra
+                            </span>
+                          </div>
+                          {item.name && <span className="unassigned-name">{item.name}</span>}
+                          <span className="unassigned-ratio">
+                            {item.assigned.toLocaleString()} packed · {item.catalogQty.toLocaleString()} on record
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    {discrepancyData.underpacked.length > 0 && <div className="section-divider" />}
+                  </>
+                )}
+                {discrepancyData.underpacked.length > 0 && (
+                  <>
+                    <div className="section-label">
+                      Shortages ({discrepancyData.underpacked.length})
+                    </div>
+                    <p className="form-hint" style={{ marginBottom: 8 }}>Fewer units packed than catalog record</p>
+                    <div className="unassigned-list">
+                      {discrepancyData.underpacked.map(item => (
+                        <div key={item.sku} className="unassigned-item">
+                          <div className="unassigned-item-row">
+                            <span className="sku-code">{item.sku}</span>
+                            <span
+                              className="unassigned-badge"
+                              style={item.confirmed ? { background: '#27ae60', color: '#fff' } : {}}
+                            >
+                              {item.confirmed ? '✓ Confirmed' : `-${item.shortage.toLocaleString()} short`}
+                            </span>
+                          </div>
+                          {item.name && <span className="unassigned-name">{item.name}</span>}
+                          <span className="unassigned-ratio">
+                            {item.assigned.toLocaleString()} packed · {item.catalogQty.toLocaleString()} on record
+                          </span>
+                          <button
+                            className="btn-secondary"
+                            style={{
+                              marginTop: 5, fontSize: 11, padding: '3px 8px', width: 'auto',
+                              ...(item.confirmed ? {} : { borderColor: '#27ae60', color: '#27ae60' }),
+                            }}
+                            onClick={() => item.confirmed
+                              ? onUnconfirmShortage(item.sku)
+                              : onConfirmShortage(item.sku)
+                            }
+                          >
+                            {item.confirmed ? 'Unconfirm' : 'Confirm shortage'}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════
+          LABELS-NEEDED VIEW — Bins edited since last label print
+      ═══════════════════════════════════════════════════════════ */}
+      {view === 'labels-needed' && (
+        <>
+          <div className="panel-header rack-view-header">
+            <div className="rack-view-nav">
+              <button className="back-btn" onClick={() => setView('main')}>← Warehouse Editor</button>
+            </div>
+            <div className="rack-view-title-row">
+              <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Labels Needed</h2>
+            </div>
+          </div>
+          <div className="panel-content">
+            {labelsNeeded.length === 0 ? (
+              <p className="form-hint" style={{ paddingTop: 8 }}>All labels are up to date.</p>
+            ) : (
+              <>
+                <p className="form-hint" style={{ marginBottom: 10 }}>
+                  {labelsNeeded.length} bin{labelsNeeded.length > 1 ? 's' : ''} edited since last print
+                </p>
+                <div className="unassigned-list">
+                  {labelsNeeded.map(bin => {
+                    const rack = racks.find(r => r.id === bin.rackId) ?? null
+                    return (
+                      <div key={bin.id} className="unassigned-item">
+                        <div className="unassigned-item-row">
+                          <span className="sku-code">{bin.binId}</span>
+                          <button
+                            className="btn-primary"
+                            style={{ fontSize: 11, padding: '3px 10px', width: 'auto' }}
+                            onClick={() => setLabelBin(bin)}
+                          >
+                            Print Label
+                          </button>
+                        </div>
+                        {rack && <span className="unassigned-name">{rack.rackId}</span>}
+                        <span className="unassigned-ratio">
+                          Edited {fmtTimestamp(bin.updatedAt)}
+                          {bin.labelPrintedAt ? ` · Printed ${fmtTimestamp(bin.labelPrintedAt)}` : ' · Never printed'}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* ── Warehouse dimension confirmation modal ──────────────────────── */}
+      {dimConfirm && (
+        <div className="label-overlay" onClick={e => { if (e.target === e.currentTarget) setDimConfirm(null) }}>
+          <div className="label-shell" style={{ maxWidth: 340 }}>
+            <div style={{
+              background: 'var(--panel)', border: '1px solid var(--border)', borderRadius: 8,
+              padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: 12,
+            }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>Change Warehouse Dimensions?</div>
+              <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: 0, lineHeight: 1.5 }}>
+                You are about to resize <strong>{dimConfirm.whCode}</strong> to{' '}
+                <strong>{dimConfirm.newWidth} × {dimConfirm.newDepth} ft</strong>.
+              </p>
+              <p style={{ fontSize: 12, color: '#e67e22', margin: 0, lineHeight: 1.5 }}>
+                ⚠ The 3D view will reset to its default camera position. All rack and bin data is preserved.
+              </p>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
+                <button className="btn-secondary" style={{ width: 'auto', padding: '7px 14px' }} onClick={() => setDimConfirm(null)}>
+                  Cancel
+                </button>
+                <button
+                  className="btn-primary"
+                  style={{ width: 'auto', padding: '7px 16px' }}
+                  onClick={() => {
+                    onUpdateWarehouseDims(dimConfirm.index, { width: dimConfirm.newWidth, depth: dimConfirm.newDepth })
+                    setDimConfirm(null)
+                    setWhDimInputs({})
+                  }}
+                >
+                  Apply Changes
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── BinLabel print modal ─────────────────────────────────────────── */}
+      {labelBin && (
+        <BinLabel
+          bin={labelBin}
+          rack={racks.find(r => r.id === labelBin.rackId) ?? null}
+          skuCatalog={skuCatalog}
+          onClose={() => setLabelBin(null)}
+          onPrinted={() => {
+            onMarkLabelPrinted(labelBin.id)
+            setLabelBin(null)
+          }}
+        />
       )}
 
     </aside>

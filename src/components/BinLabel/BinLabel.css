@@ -1,0 +1,201 @@
+/* ── Label overlay (screen only) ────────────────────────────────────────── */
+.label-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 300;
+}
+
+.label-shell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.label-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  max-width: 440px;
+  padding: 0 4px;
+}
+.label-controls-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.label-controls-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* ── The physical label: 4×6 inches at 96 dpi = 384×576 px on screen ─────── */
+.bin-label {
+  width: 384px;
+  height: 576px;
+  background: #ffffff;
+  color: #000000;
+  font-family: 'Arial', 'Helvetica', sans-serif;
+  padding: 14px 16px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.label-top {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 8px;
+}
+
+.label-qr {
+  width: 110px;
+  height: 110px;
+  flex-shrink: 0;
+}
+
+.label-location {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.label-bin-id {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  line-height: 1.1;
+}
+
+.label-rack,
+.label-pos {
+  font-size: 12px;
+  color: #444;
+}
+
+.label-dims {
+  font-size: 10px;
+  color: #888;
+  margin-top: 4px;
+}
+
+.label-divider {
+  border-top: 1.5px solid #000;
+  margin: 6px 0;
+}
+
+.label-contents-header {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: #555;
+  margin-bottom: 4px;
+}
+
+.label-empty {
+  font-size: 11px;
+  color: #999;
+  font-style: italic;
+}
+
+.label-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  flex: 1;
+}
+
+.label-table th {
+  text-align: left;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #777;
+  border-bottom: 1px solid #ddd;
+  padding: 2px 4px 3px 0;
+}
+
+.label-table td {
+  padding: 3px 4px 3px 0;
+  border-bottom: 1px solid #f0f0f0;
+  vertical-align: top;
+}
+
+.label-sku {
+  font-weight: 700;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.label-qty {
+  font-weight: 600;
+  white-space: nowrap;
+  color: #333;
+}
+
+.label-name {
+  color: #555;
+  font-size: 10px;
+}
+
+.label-footer {
+  margin-top: auto;
+  padding-top: 6px;
+  border-top: 1px solid #eee;
+  font-size: 8px;
+  color: #aaa;
+  text-align: center;
+}
+
+/* ── Print styles ───────────────────────────────────────────────────────── */
+@media print {
+  /* Hide everything on the page */
+  body > * { display: none !important; }
+
+  /* Except our label */
+  .label-overlay,
+  .label-shell,
+  .bin-label { display: flex !important; }
+
+  .label-overlay {
+    position: static !important;
+    background: transparent !important;
+    inset: auto !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    z-index: auto !important;
+  }
+
+  .label-shell {
+    gap: 0 !important;
+    flex-direction: column !important;
+    align-items: flex-start !important;
+  }
+
+  .no-print { display: none !important; }
+
+  .bin-label {
+    width: 4in !important;
+    height: 6in !important;
+    border: none !important;
+    border-radius: 0 !important;
+    padding: 0.18in 0.2in !important;
+    page-break-after: avoid !important;
+  }
+
+  @page {
+    size: 4in 6in;
+    margin: 0;
+  }
+}
