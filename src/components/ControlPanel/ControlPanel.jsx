@@ -21,13 +21,16 @@ function ControlPanel({
   onSelectRack, onSelectBin,
   onStartMoveBin, onMoveBin, onCancelMoveBin,
   onRequestDeleteBin,
-  onAddSku, onRemoveSku, onUpdateSkuQty,
+  onAddSku, onRemoveSku, onUpdateSkuQty, onUpdateSkuLocation,
   onImportCsv, skuCatalog, catalogUpdatedAt,
+  onImportNetsuiteItems, netsuiteItemsCount = 0, netsuiteItemsUpdatedAt,
   confirmedShortages, onConfirmShortage, onUnconfirmShortage,
-  onUpdateBinDimensions, onMarkLabelPrinted,
+  onUpdateBinDimensions, onMarkLabelPrinted, onUpdateBin,
   onUpdateWarehouseDims,
   rooms = [], selectedRoomId, placingRoom,
   onStartPlaceRoom, onCancelPlaceRoom, onDeleteRoom, onSelectRoom,
+  poLineData = {}, poLocations = {}, locationColors = {},
+  locationQtys = {}, locationNames = [],
 }) {
   const [addingRack, setAddingRack] = useState(false)
   const [form, setForm] = useState(DEFAULT_FORM)
@@ -56,6 +59,7 @@ function ControlPanel({
   const [labelBin, setLabelBin] = useState(null)
   // Controlled inputs for bin box dimensions (in inches); synced to selected bin on navigation
   const [dimInputs, setDimInputs] = useState({ binW: '24', binD: '16', binH: '17' })
+  const [poInputs, setPoInputs]   = useState({ poNumber: '', poDescription: '' })
   // Warehouse dimension editing: pending confirmation { index, newWidth, newDepth }
   const [dimConfirm, setDimConfirm] = useState(null)
   // Per-warehouse dim inputs (width and depth in feet, integers)
@@ -92,6 +96,10 @@ function ControlPanel({
       binD: String(Math.round((bin?.binD ?? rack?.binD ?? (4/3))   * 12 * 10) / 10),
       binH: String(Math.round((bin?.binH ?? rack?.binH ?? (17/12)) * 12 * 10) / 10),
     })
+    setPoInputs({
+      poNumber:      bin?.poNumber      ?? '',
+      poDescription: bin?.poDescription ?? '',
+    })
   }, [selectedBinId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Read a CSV file from disk and hand the raw text to the parent handler
@@ -101,7 +109,16 @@ function ControlPanel({
     const reader = new FileReader()
     reader.onload = (ev) => onImportCsv(ev.target.result)
     reader.readAsText(file)
-    e.target.value = '' // reset so the same file can be re-selected if needed
+    e.target.value = ''
+  }
+
+  const handleItemsFile = (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => onImportNetsuiteItems?.(ev.target.result)
+    reader.readAsText(file)
+    e.target.value = ''
   }
 
   // Refs so navigation effects can read current values without re-running on every change
@@ -218,7 +235,7 @@ function ControlPanel({
     const trimmed = skuInput.trim().toUpperCase()
     if (!trimmed) { setSkuError('Enter a SKU code.'); return }
     const qty = Math.max(1, Math.round(Number(qtyInput) || 1))
-    onAddSku(selectedBinId, trimmed, qty)
+    onAddSku(selectedBinId, trimmed, qty, skuLocation)
     setSkuInput('')
     setQtyInput(1)
     setSkuError(null)
@@ -357,6 +374,48 @@ function ControlPanel({
       .filter(b => b.updatedAt && (!b.labelPrintedAt || b.updatedAt > b.labelPrintedAt))
       .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))
   , [bins])
+
+  // Selected location when adding a new SKU entry to a bin (default TBD)
+  const [skuLocation, setSkuLocation] = useState('TBD')
+
+  // All warehouse location names: driven by the Quantities CSV header columns when available;
+  // falls back to PO data for users who haven't re-imported the Quantities CSV yet.
+  const allLocations = useMemo(() => {
+    if (locationNames.length > 0) return ['TBD', ...locationNames]
+    const locs = new Set()
+    for (const locMap of Object.values(poLineData.skuBreakdown ?? {})) {
+      for (const loc of Object.keys(locMap)) { if (loc !== 'Unknown') locs.add(loc) }
+    }
+    return ['TBD', ...Array.from(locs).sort()]
+  }, [locationNames, poLineData])
+
+  // Bins that have at least one SKU entry with no assigned location (TBD)
+  const noLocationBins = useMemo(() =>
+    bins.filter(b => (b.skus ?? []).some(s => !s.location || s.location === 'TBD'))
+  , [bins])
+
+  // For each unique SKU in the selected bin: total packed across ALL bins,
+  // per-location packed breakdown, and total inventory from locationQtys.
+  const binSkuStats = useMemo(() => {
+    if (!selectedBin) return {}
+    const skuCodes = [...new Set((selectedBin.skus ?? []).map(e => e.sku))]
+    const result = {}
+    for (const sku of skuCodes) {
+      const allEntries = bins.flatMap(b => (b.skus ?? []).filter(s => s.sku === sku))
+      const totalPacked = allEntries.reduce((s, e) => s + e.qty, 0)
+      const packedByLoc = {}
+      for (const e of allEntries) {
+        const loc = e.location ?? 'TBD'
+        packedByLoc[loc] = (packedByLoc[loc] ?? 0) + e.qty
+      }
+      const invBreakdown = locationQtys[sku]
+      const totalInventory = invBreakdown
+        ? Object.values(invBreakdown).reduce((s, n) => s + n, 0)
+        : (skuCatalog?.[sku]?.qty ?? null)
+      result[sku] = { totalPacked, packedByLoc, totalInventory }
+    }
+    return result
+  }, [selectedBin, bins, locationQtys, skuCatalog]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Lookup panel handlers ─────────────────────────────────────────────────
 
@@ -551,6 +610,18 @@ function ControlPanel({
                 </button>
               </>
             )}
+            {noLocationBins.length > 0 && (
+              <>
+                <div style={{ height: 6 }} />
+                <button
+                  className="btn-secondary panel-nav-btn"
+                  style={{ borderColor: '#b8860b', color: '#b8860b' }}
+                  onClick={() => setView('no-location')}
+                >
+                  Bins with no Location ({noLocationBins.length})
+                </button>
+              </>
+            )}
 
             <div className="section-divider" />
 
@@ -740,14 +811,60 @@ function ControlPanel({
             </div>
             <div className="section-divider" />
             <div className="section-label">NetSuite Data</div>
-            {catalogUpdatedAt
-              ? <p className="catalog-timestamp">Last synced: {fmtTimestamp(catalogUpdatedAt)}</p>
-              : <p className="catalog-timestamp" style={{ color: '#5a6a7a' }}>Never synced</p>
-            }
+            <p className="catalog-timestamp" style={{ marginBottom: 4 }}>
+              Quantities CSV{catalogUpdatedAt
+                ? `: ${fmtTimestamp(catalogUpdatedAt)}`
+                : <span style={{ color: '#5a6a7a' }}> — never imported</span>}
+            </p>
             <label className="btn-secondary csv-import-btn">
-              {Object.keys(skuCatalog ?? {}).length > 0 ? '↻ Re-import CSV' : '↑ Import NetSuite CSV'}
+              {Object.keys(skuCatalog ?? {}).length > 0 ? '↻ Import NetSuite Quantities CSV' : '↑ Import NetSuite Quantities CSV'}
               <input type="file" accept=".csv" hidden onChange={handleCsvFile} />
             </label>
+            <p className="catalog-timestamp" style={{ marginTop: 10, marginBottom: 4 }}>
+              Items CSV{netsuiteItemsUpdatedAt
+                ? `: ${fmtTimestamp(netsuiteItemsUpdatedAt)}`
+                : <span style={{ color: '#5a6a7a' }}> — never imported</span>}
+              {netsuiteItemsCount > 0 && <span style={{ color: '#27ae60' }}> ({netsuiteItemsCount.toLocaleString()} SKUs)</span>}
+            </p>
+            <label className="btn-secondary csv-import-btn">
+              {netsuiteItemsCount > 0 ? '↻ Import NetSuite Items CSV' : '↑ Import NetSuite Items CSV'}
+              <input type="file" accept=".csv" hidden onChange={handleItemsFile} />
+            </label>
+            {/* Feature 4 — bin color legend */}
+            {Object.keys(locationColors).length > 1 && (
+              <>
+                <div className="section-divider" />
+                <div className="section-label">Bin Color Legend</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginBottom: 8 }}>
+                  {Object.entries(locationColors).map(([loc, hex]) => {
+                    const css = '#' + hex.toString(16).padStart(6, '0')
+                    return (
+                      <div key={loc} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ width: 14, height: 14, borderRadius: 3, background: css, flexShrink: 0, display: 'inline-block' }} />
+                        <span style={{ fontSize: 11, color: 'var(--text)' }}>{loc}</span>
+                        {loc === 'TBD' && <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>— no location assigned</span>}
+                      </div>
+                    )
+                  })}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ width: 14, height: 14, borderRadius: 3, background: '#1a5cb8', flexShrink: 0, display: 'inline-block' }} />
+                    <span style={{ fontSize: 11, color: 'var(--text)' }}>No PO data</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ width: 14, height: 14, borderRadius: 3, background: '#ffb020', flexShrink: 0, display: 'inline-block' }} />
+                    <span style={{ fontSize: 11, color: 'var(--text)' }}>Selected</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ width: 14, height: 14, borderRadius: 3, background: '#4499ff', flexShrink: 0, display: 'inline-block' }} />
+                    <span style={{ fontSize: 11, color: 'var(--text)' }}>Moving</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ width: 14, height: 14, borderRadius: 3, background: '#c0392b', flexShrink: 0, display: 'inline-block' }} />
+                    <span style={{ fontSize: 11, color: 'var(--text)' }}>Incoming / Displaced</span>
+                  </div>
+                </div>
+              </>
+            )}
             <div className="section-divider" />
             <button className="btn-secondary" disabled>Export Layout</button>
 
@@ -985,6 +1102,53 @@ function ControlPanel({
 
                 <div className="section-divider" />
 
+                {/* PO Info — shown and editable for bins received from staging */}
+                {(selectedBin.poNumber || selectedBin.poDescription || selectedBin.fromStaging) && (
+                  <>
+                    <div className="section-label">PO Info</div>
+                    {/* Feature 2 — Final Naghedi Destination from imported PO data */}
+                    {selectedBin.poNumber && poLocations[selectedBin.poNumber]?.location && (
+                      <div className="stat-group" style={{ marginBottom: 6 }}>
+                        <label>Destination</label>
+                        <span className="stat-value" style={{ color: '#27ae60', fontWeight: 600 }}>
+                          {poLocations[selectedBin.poNumber].location}
+                        </span>
+                      </div>
+                    )}
+                    {[
+                      { key: 'poNumber',      label: 'PO Number' },
+                      { key: 'poDescription', label: 'Order' },
+                    ].map(({ key, label }) => (
+                      <div key={key} className="stat-group" style={{ alignItems: 'flex-start', gap: 4 }}>
+                        <label>{label}</label>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>
+                          <input
+                            className="form-input"
+                            style={{ fontSize: 11, flex: 1, minWidth: 0, padding: '3px 7px' }}
+                            value={poInputs[key]}
+                            onChange={e => setPoInputs(p => ({ ...p, [key]: e.target.value }))}
+                            onBlur={() => onUpdateBin?.(selectedBin.id, { [key]: poInputs[key].trim() || null })}
+                            onKeyDown={e => e.key === 'Enter' && e.target.blur()}
+                            placeholder="—"
+                          />
+                          {selectedBin[key] && (
+                            <button
+                              className="icon-btn"
+                              style={{ fontSize: 10, padding: '2px 5px', flexShrink: 0 }}
+                              title={`Clear ${label}`}
+                              onClick={() => {
+                                setPoInputs(p => ({ ...p, [key]: '' }))
+                                onUpdateBin?.(selectedBin.id, { [key]: null })
+                              }}
+                            >✕</button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    <div className="section-divider" />
+                  </>
+                )}
+
                 <div className="section-label">Box Dimensions</div>
                 <div className="form-row" style={{ marginBottom: 4 }}>
                   {[
@@ -1022,18 +1186,79 @@ function ControlPanel({
 
                 <div className="section-divider" />
 
+                {/* Bin-level total (units in this bin only) */}
+                {(selectedBin.skus ?? []).length > 0 && (
+                  <div style={{ marginBottom: 6, fontSize: 12, color: 'var(--text-dim)' }}>
+                    {(selectedBin.skus ?? []).reduce((s, e) => s + (e.qty ?? 0), 0).toLocaleString()} unit{(selectedBin.skus ?? []).reduce((s, e) => s + (e.qty ?? 0), 0) !== 1 ? 's' : ''} in this bin
+                  </div>
+                )}
                 <div className="section-label">Contents</div>
 
-                {/* SKU list — each entry has an editable qty and shows "of Y total" when catalog is loaded */}
+                {/* SKU list — each entry shows cross-bin stats, location badge, and "of X" */}
                 {(selectedBin.skus ?? []).length > 0 ? (
                   <div className="sku-list">
                     {selectedBin.skus.map(entry => {
-                      const catalogTotal = skuCatalog?.[entry.sku]?.qty
+                      const entryLoc = entry.location ?? 'TBD'
+                      // "of X" uses current stock per location from Warehouse Item View CSV;
+                      // falls back to catalog total for TBD entries
+                      const locTotal = entryLoc !== 'TBD'
+                        ? (locationQtys[entry.sku]?.[entryLoc] ?? null)
+                        : (skuCatalog?.[entry.sku]?.qty ?? null)
                       const editVal = editingQtys[entry.id] ?? entry.qty
+                      const locHex = locationColors[entryLoc] ?? (entryLoc === 'TBD' ? 0xb8860b : null)
+                      const locCss = locHex ? '#' + locHex.toString(16).padStart(6, '0') : '#5a6a7a'
                       return (
-                        <div key={entry.id} className="sku-entry">
-                          <span className="sku-code">{entry.sku}</span>
-                          <div className="sku-qty-group">
+                        <div key={entry.id} className="sku-entry" style={{ flexWrap: 'wrap', gap: 4 }}>
+                          <span className="sku-code" style={{ flex: '1 1 100%' }}>{entry.sku}</span>
+                          {/* Cross-bin aggregation: total packed across all bins + per-location breakdown */}
+                          {binSkuStats[entry.sku] && (() => {
+                            const { totalPacked, packedByLoc, totalInventory } = binSkuStats[entry.sku]
+                            const remaining = totalInventory != null ? totalInventory - totalPacked : null
+                            return (
+                              <div style={{ flex: '1 1 100%', fontSize: 10, marginBottom: 1 }}>
+                                <span style={{ color: 'var(--text-muted)' }}>
+                                  {totalPacked.toLocaleString()} packed (all bins)
+                                  {totalInventory != null && <> · {totalInventory.toLocaleString()} in stock</>}
+                                  {remaining != null && remaining > 0 && (
+                                    <> · <span style={{ color: '#e67e22' }}>{remaining.toLocaleString()} unassigned</span></>
+                                  )}
+                                  {remaining != null && remaining <= 0 && (
+                                    <> · <span style={{ color: '#27ae60' }}>fully packed</span></>
+                                  )}
+                                </span>
+                                {/* Unassigned per location: how many units in each location still need to be packed */}
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 8px', marginTop: 2 }}>
+                                  {Object.entries(locationQtys[entry.sku] ?? {}).map(([loc, invQty]) => {
+                                    const packedQty = packedByLoc[loc] ?? 0
+                                    const unassigned = invQty - packedQty
+                                    if (unassigned <= 0) return null
+                                    const hex = locationColors[loc] ?? (loc === 'TBD' ? 0xb8860b : 0x5a6a7a)
+                                    const css = '#' + hex.toString(16).padStart(6, '0')
+                                    return (
+                                      <span key={loc} style={{ color: css, whiteSpace: 'nowrap' }}>
+                                        {loc}: {unassigned.toLocaleString()} left
+                                      </span>
+                                    )
+                                  }).filter(Boolean)}
+                                </div>
+                              </div>
+                            )
+                          })()}
+                          {/* Inline location selector — click to reassign, merges if target exists */}
+                          <select
+                            value={entryLoc}
+                            onChange={e => onUpdateSkuLocation?.(selectedBin.id, entry.id, e.target.value)}
+                            style={{
+                              flex: '1 1 auto', fontSize: 10, color: locCss, fontWeight: 600,
+                              background: 'var(--panel-raised, #1a2330)', border: '1px solid var(--border)',
+                              borderRadius: 3, padding: '2px 4px', cursor: 'pointer',
+                            }}
+                          >
+                            {allLocations.map(loc => (
+                              <option key={loc} value={loc}>{loc}</option>
+                            ))}
+                          </select>
+                          <div className="sku-qty-group" style={{ flex: '0 0 auto' }}>
                             <input
                               className="sku-qty-input"
                               type="number"
@@ -1049,8 +1274,8 @@ function ControlPanel({
                               }}
                               onKeyDown={e => e.key === 'Enter' && e.target.blur()}
                             />
-                            {catalogTotal != null && (
-                              <span className="sku-of-total">of {catalogTotal.toLocaleString()}</span>
+                            {locTotal != null && (
+                              <span className="sku-of-total">of {locTotal.toLocaleString()}</span>
                             )}
                           </div>
                           <button
@@ -1103,6 +1328,41 @@ function ControlPanel({
                   <p className="sku-catalog-hint">
                     {skuCatalog[skuInput.trim().toUpperCase()].qty.toLocaleString()} units on record
                   </p>
+                )}
+                {/* Feature 4 — location picker for the SKU being added */}
+                <select
+                  className="form-input"
+                  style={{ marginBottom: 6, fontSize: 11 }}
+                  value={skuLocation}
+                  onChange={e => setSkuLocation(e.target.value)}
+                >
+                  {allLocations.map(loc => (
+                    <option key={loc} value={loc}>{loc}</option>
+                  ))}
+                </select>
+                {/* Per-location stock breakdown from Warehouse Item View CSV; chips are clickable to select location */}
+                {!showSuggestions && skuInput && locationQtys[skuInput.trim().toUpperCase()] && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 8px', marginBottom: 6 }}>
+                    {Object.entries(locationQtys[skuInput.trim().toUpperCase()]).map(([loc, qty]) => {
+                      const hex = locationColors[loc] ?? (loc === 'TBD' ? 0xb8860b : 0x5a6a7a)
+                      const css = '#' + hex.toString(16).padStart(6, '0')
+                      const isActive = skuLocation === loc
+                      return (
+                        <button
+                          key={loc}
+                          type="button"
+                          onClick={() => setSkuLocation(loc)}
+                          style={{
+                            fontSize: 10, padding: '2px 8px', borderRadius: 3, cursor: 'pointer',
+                            border: `1px solid ${css}`, color: isActive ? '#fff' : css,
+                            background: isActive ? css : 'transparent', whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {loc}: {qty.toLocaleString()}
+                        </button>
+                      )
+                    })}
+                  </div>
                 )}
                 <div className="sku-add-row">
                   <input
@@ -1625,6 +1885,60 @@ function ControlPanel({
                           Edited {fmtTimestamp(bin.updatedAt)}
                           {bin.labelPrintedAt ? ` · Printed ${fmtTimestamp(bin.labelPrintedAt)}` : ' · Never printed'}
                         </span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════
+          NO-LOCATION VIEW — Bins with TBD SKU entries
+      ═══════════════════════════════════════════════════════════ */}
+      {view === 'no-location' && (
+        <>
+          <div className="panel-header rack-view-header">
+            <div className="rack-view-nav">
+              <button className="back-btn" onClick={() => setView('main')}>← Warehouse Editor</button>
+            </div>
+            <div className="rack-view-title-row">
+              <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Bins with no Location</h2>
+            </div>
+          </div>
+          <div className="panel-content">
+            {noLocationBins.length === 0 ? (
+              <p className="form-hint" style={{ paddingTop: 8 }}>All bins have locations assigned.</p>
+            ) : (
+              <>
+                <p className="form-hint" style={{ marginBottom: 10, color: '#b8860b' }}>
+                  {noLocationBins.length} bin{noLocationBins.length !== 1 ? 's' : ''} with unassigned SKU units — open each bin to assign a location.
+                </p>
+                <div className="unassigned-list">
+                  {noLocationBins.map(bin => {
+                    const rack = racks.find(r => r.id === bin.rackId) ?? null
+                    const tbdQty = (bin.skus ?? [])
+                      .filter(s => !s.location || s.location === 'TBD')
+                      .reduce((sum, s) => sum + (s.qty ?? 0), 0)
+                    return (
+                      <div
+                        key={bin.id}
+                        className="unassigned-item"
+                        style={{ cursor: 'pointer' }}
+                        onClick={() => { onSelectBin(bin.id); setView('bin') }}
+                      >
+                        <div className="unassigned-item-row">
+                          <span className="sku-code">{bin.binId}</span>
+                          <span className="unassigned-badge" style={{ background: '#b8860b', color: '#fff' }}>
+                            {tbdQty} TBD
+                          </span>
+                        </div>
+                        {rack && <span className="unassigned-name">{rack.rackId}</span>}
+                        {bin.poNumber && (
+                          <span className="unassigned-ratio">{bin.poNumber}</span>
+                        )}
                       </div>
                     )
                   })}

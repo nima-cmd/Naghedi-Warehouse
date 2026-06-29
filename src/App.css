@@ -1381,6 +1381,16 @@ kbd {
   font-weight: 700;
   color: var(--text);
   min-width: 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.staging-cnt-date {
+  font-size: 10px;
+  font-weight: 400;
+  color: #4a5a6a;
+  font-family: var(--mono);
 }
 
 .staging-cnt-meta {
@@ -1435,8 +1445,9 @@ kbd {
 
 .staging-detail-title {
   display: flex;
-  align-items: baseline;
-  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
   min-width: 0;
 }
 
@@ -1449,6 +1460,52 @@ kbd {
 .staging-detail-po {
   font-size: 11px;
   color: #5a6a7a;
+  font-family: var(--mono);
+}
+.staging-po-chip {
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 3px;
+  transition: color 0.15s, background 0.15s;
+}
+.staging-po-chip:hover {
+  color: #a0b4c8;
+  background: rgba(255,255,255,0.05);
+}
+.staging-po-chip.active {
+  color: #ffb020;
+  background: rgba(255,176,32,0.1);
+}
+
+.staging-ir-to {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.staging-ir-input {
+  width: 90px;
+  padding: 3px 7px;
+  font-size: 11px;
+  font-family: var(--mono);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s;
+}
+.staging-ir-input::placeholder { color: #4a5a6a; }
+.staging-ir-input:focus { border-color: var(--accent); }
+.staging-ir-input:not(:placeholder-shown) {
+  border-color: #27ae60;
+  color: #27ae60;
+}
+
+.staging-detail-date {
+  font-size: 11px;
+  color: #4a5a6a;
   font-family: var(--mono);
 }
 
@@ -1490,6 +1547,7 @@ kbd {
 .staging-issue-stat.ok   { color: #27ae60; }
 .staging-issue-stat.warn { color: #e67e22; }
 .staging-issue-stat.err  { color: #e74c3c; }
+.staging-issue-stat.crit { color: #8e44ad; font-weight: 600; }
 .staging-issue-stat.info { color: #5a6a7a; }
 
 /* ── Box list ── */
@@ -1525,9 +1583,20 @@ kbd {
   border-left-color: #e74c3c;
 }
 
+.box-item.issue-multi-po {
+  border-left-color: #8e44ad;
+  background: rgba(142,68,173,0.04);
+}
+
 .box-item.selected.issue-sku,
-.box-item.selected.issue-dims {
+.box-item.selected.issue-dims,
+.box-item.selected.issue-multi-po {
   border-left-color: var(--accent);
+}
+
+.box-po.multi-po-label {
+  color: #8e44ad;
+  font-weight: 600;
 }
 
 .box-item-row {
@@ -1560,6 +1629,7 @@ kbd {
 
 .issue-badge.warn { background: rgba(230,126,34,0.2); color: #e67e22; }
 .issue-badge.err  { background: rgba(231,76,60,0.2);  color: #e74c3c; }
+.issue-badge.crit { background: rgba(142,68,173,0.2); color: #8e44ad; font-weight: 600; }
 .issue-badge.info { background: rgba(90,106,122,0.2); color: #8a9aaa; }
 
 .box-print-btn {
@@ -1607,6 +1677,12 @@ kbd {
 .box-dims {
   font-size: 10px;
   color: #4a5a6a;
+  white-space: nowrap;
+}
+
+.box-po {
+  font-size: 10px;
+  color: #5a7a8a;
   white-space: nowrap;
 }
 
@@ -1669,6 +1745,73 @@ kbd {
   border: 1px solid rgba(231,76,60,0.3);
 }
 
+.box-card-issue.multi-po {
+  background: rgba(142,68,173,0.08);
+  color: #6c3483;
+  border: 1px solid rgba(142,68,173,0.35);
+  font-size: 12px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.multi-po-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #8e44ad;
+}
+.multi-po-desc {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.multi-po-po-chip {
+  display: inline-block;
+  background: rgba(142,68,173,0.15);
+  color: #6c3483;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+.multi-po-sku-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 2px 0;
+}
+.multi-po-po-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.multi-po-po-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: #8e44ad;
+  background: rgba(142,68,173,0.12);
+  padding: 1px 6px;
+  border-radius: 3px;
+  min-width: 50px;
+  text-align: center;
+}
+.multi-po-sku-entry {
+  font-size: 10px;
+  font-family: var(--mono);
+  color: #4a3a5a;
+  background: rgba(142,68,173,0.06);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.multi-po-hint {
+  margin: 0;
+  font-size: 10px;
+  color: #8a7a9a;
+  line-height: 1.5;
+  font-style: italic;
+}
+
 .box-sku-list {
   display: flex;
   flex-direction: column;
@@ -1693,5 +1836,83 @@ kbd {
   flex: 1;
   overflow: hidden;
   cursor: crosshair;
+  position: relative;  /* CSS2DRenderer overlay must sit inside this */
+}
+
+/* ── Staging search bar ── */
+.staging-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  background: rgba(0,0,0,0.15);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.staging-search-input {
+  flex: 1;
+  max-width: 320px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 5px 10px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.staging-search-input:focus {
+  border-color: var(--accent);
+}
+
+.staging-search-input::placeholder {
+  color: #3a4a5a;
+}
+
+.staging-search-clear {
+  background: none;
+  border: none;
+  color: #5a6a7a;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  line-height: 1;
+  transition: color 0.1s;
+}
+
+.staging-search-clear:hover {
+  color: var(--text);
+}
+
+.staging-search-count {
+  font-size: 11px;
+  color: #5a6a7a;
+  white-space: nowrap;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   MOBILE / TABLET  (≤ 768px)
+═══════════════════════════════════════════════════════════ */
+
+@media (max-width: 768px) {
+  /* Hide the 3D canvas layout on phones — use Walk tab instead */
+  #main-layout { display: none !important; }
+
+  /* Larger touch targets for tab buttons */
+  .tab-btn { min-height: 44px; font-size: 13px; padding: 0 16px; }
+  .tab-bar  { height: 44px; }
+
+  /* Walk mode fills remaining space */
+  .walk-mode { flex: 1; }
+
+  /* Modal fits the screen width on mobile */
+  .modal-card { width: calc(100vw - 32px); max-width: 380px; }
+
+  /* Scanner modal fills the screen */
+  .scanner-modal { width: calc(100vw - 24px); }
 }
 

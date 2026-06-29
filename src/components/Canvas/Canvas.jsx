@@ -160,7 +160,27 @@ function buildWarehouse(scene, offsetX, name, floorMeshes, whIndex, whW = W, whD
 }
 
 // Build a single bin box mesh, positioned in local rack coordinates
-function buildBinMesh(bin, rack, selected = false, ghost = false, hasContent = false) {
+// Returns the Three.js hex color representing a bin's dominant SKU location.
+// Priority: most qty-weighted non-TBD location wins; pure-TBD → dark gold warning.
+// Returns null if the bin has no SKU content (caller handles empty gray).
+function getBinLocColor(bin, locationColors) {
+  const skus = bin.skus ?? []
+  if (skus.length === 0) return null
+  // Tally total qty per location
+  const totals = {}
+  for (const s of skus) {
+    const loc = s.location ?? 'TBD'
+    totals[loc] = (totals[loc] ?? 0) + (s.qty ?? 0)
+  }
+  // Pick location with highest qty; TBD participates but loses to any named location of equal qty
+  let best = null, bestQty = -1
+  for (const [loc, qty] of Object.entries(totals)) {
+    if (qty > bestQty || (qty === bestQty && loc !== 'TBD')) { best = loc; bestQty = qty }
+  }
+  return locationColors[best] ?? (best === 'TBD' ? 0xb8860b : 0x1a5cb8)
+}
+
+function buildBinMesh(bin, rack, selected = false, ghost = false, hasContent = false, locColor = null) {
   // Per-bin dimension overrides fall back to rack level, then global defaults
   const bw = bin.binW ?? rack.binW ?? BIN.w
   const bd = bin.binD ?? rack.binD ?? BIN.d
@@ -171,7 +191,7 @@ function buildBinMesh(bin, rack, selected = false, ghost = false, hasContent = f
   const mat = ghost
     ? new THREE.MeshLambertMaterial({ color: 0x4499ff, transparent: true, opacity: 0.3 })
     : new THREE.MeshLambertMaterial({
-        color: selected ? 0xffb020 : hasContent ? 0x1a5cb8 : 0x444444,
+        color: selected ? 0xffb020 : locColor ?? (hasContent ? 0x1a5cb8 : 0x444444),
       })
   const mesh = new THREE.Mesh(geo, mat)
 
@@ -226,6 +246,7 @@ function Canvas({
   onMoveBin,
   onCancelMoveBin,
   onRequestDeleteBin,
+  locationColors = {},
   rooms = [],
   selectedRoomId,
   placingRoom,
@@ -626,7 +647,8 @@ function Canvas({
         const isSelected  = bin.id === selectedBinId
         const isMoving    = bin.id === movingBinId
         const hasContent  = (bin.skus ?? []).length > 0
-        const binMesh = buildBinMesh(bin, rack, isSelected, isMoving, hasContent)
+        const locColor    = hasContent ? getBinLocColor(bin, locationColors) : null
+        const binMesh = buildBinMesh(bin, rack, isSelected, isMoving, hasContent, locColor)
         binMesh.userData.binId    = bin.id
         binMesh.userData.binRackId = bin.rackId
         binMesh.userData.binCol   = bin.col
@@ -681,7 +703,10 @@ function Canvas({
     }
     // ── Displaced bins — rendered in the gap between warehouses (x≈0) ──────────
     if (displacedGroup) {
-      const displacedBins = bins.filter(b => b.displaced)
+      // Sort by PO number so incoming bins from the same PO are grouped together
+      const displacedBins = bins
+        .filter(b => b.displaced)
+        .sort((a, b) => (a.poNumber ?? '') < (b.poNumber ?? '') ? -1 : 1)
       if (displacedBins.length > 0) {
         const COLS    = 4
         const xSpacing = BIN.d + 0.4   // ~1.73
@@ -696,10 +721,12 @@ function Canvas({
 
           const isSelected = bin.id === selectedBinId
           const isMoving   = bin.id === movingBinId
+          const hasContent = (bin.skus ?? []).length > 0
+          const dispLocColor = hasContent ? getBinLocColor(bin, locationColors) : null
 
           const geo = new THREE.BoxGeometry(BIN.d * 0.88, BIN.h * 0.88, BIN.w * 0.88)
           const mat = new THREE.MeshLambertMaterial({
-            color:       isSelected ? 0xffb020 : isMoving ? 0x4499ff : 0xc0392b,
+            color:       isSelected ? 0xffb020 : isMoving ? 0x4499ff : dispLocColor ?? 0xc0392b,
             transparent: isMoving,
             opacity:     isMoving ? 0.5 : 1,
           })
@@ -708,22 +735,37 @@ function Canvas({
           mesh.userData.binId = bin.id
           displacedGroup.add(mesh)
 
+          const baseStyle = isSelected
+            ? 'color:#1a1206;background:rgba(255,176,32,.95)'
+            : 'color:#fff8f0;background:rgba(160,60,10,.95)'
           const lblDiv = document.createElement('div')
-          lblDiv.textContent = bin.binId
           lblDiv.style.cssText = [
-            isSelected ? 'color:#1a1206;background:rgba(255,176,32,.95)' : 'color:#fff8f0;background:rgba(160,60,10,.95)',
+            baseStyle,
             "font-family:'JetBrains Mono',ui-monospace,monospace",
             'font-size:8px;font-weight:700',
-            'padding:1px 4px;border-radius:3px;pointer-events:none;white-space:nowrap',
+            'padding:2px 4px;border-radius:3px;pointer-events:none;white-space:nowrap;line-height:1.3',
           ].join(';')
+          if (bin.poNumber) {
+            const poDiv = document.createElement('div')
+            poDiv.style.cssText = 'font-size:6px;opacity:0.75;margin-bottom:1px;letter-spacing:0.03em'
+            poDiv.textContent = `PO ${bin.poNumber}`
+            lblDiv.appendChild(poDiv)
+          }
+          const idDiv = document.createElement('div')
+          idDiv.textContent = bin.binId
+          lblDiv.appendChild(idDiv)
+
           const lbl = new CSS2DObject(lblDiv)
           lbl.position.set(0, BIN.h / 2 + 0.15, 0)
           mesh.add(lbl)
         })
 
         // Zone header label
+        const hasIncoming = displacedBins.some(b => b.fromStaging)
         const zoneDiv = document.createElement('div')
-        zoneDiv.textContent = `${displacedBins.length} displaced ${displacedBins.length === 1 ? 'bin' : 'bins'} — click to select`
+        zoneDiv.textContent = hasIncoming
+          ? `${displacedBins.length} incoming bin${displacedBins.length !== 1 ? 's' : ''} — grouped by PO — click to select`
+          : `${displacedBins.length} displaced ${displacedBins.length === 1 ? 'bin' : 'bins'} — click to select`
         zoneDiv.style.cssText = [
           'color:#c05218',
           "font-family:'Space Grotesk',system-ui,sans-serif",
@@ -826,7 +868,31 @@ function Canvas({
     }
   }, [rooms, selectedRoomId])
 
-  return <div ref={mountRef} style={{ width: '100%', height: '100%', position: 'relative' }} />
+  const legendEntries = Object.entries(locationColors).filter(([loc]) => loc !== 'TBD')
+  return (
+    <div ref={mountRef} style={{ width: '100%', height: '100%', position: 'relative' }}>
+      {legendEntries.length > 0 && (
+        <div style={{
+          position: 'absolute', top: 12, right: 12, zIndex: 10,
+          background: 'rgba(10,16,26,0.78)', backdropFilter: 'blur(4px)',
+          border: '1px solid rgba(255,255,255,0.07)',
+          borderRadius: 6, padding: '6px 10px',
+          display: 'flex', flexDirection: 'column', gap: 4,
+          pointerEvents: 'none',
+        }}>
+          {legendEntries.map(([loc, hex]) => {
+            const css = '#' + hex.toString(16).padStart(6, '0')
+            return (
+              <span key={loc} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10 }}>
+                <span style={{ width: 10, height: 10, borderRadius: 2, background: css, flexShrink: 0, display: 'inline-block' }} />
+                <span style={{ color: 'rgba(255,255,255,0.65)', whiteSpace: 'nowrap' }}>{loc}</span>
+              </span>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
 }
 
 export default Canvas

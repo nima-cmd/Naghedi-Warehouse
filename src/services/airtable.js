@@ -14,7 +14,7 @@ const API   = `https://api.airtable.com/v0/${BASE}/${TABLE}`
 // Build the Authorization header from the token in .env.local
 function authHeaders() {
   const token = import.meta.env.VITE_AIRTABLE_TOKEN
-  if (!token || token === 'your_personal_access_token_here') {
+  if (!token) {
     throw new Error(
       'Airtable token missing. Open .env.local and replace ' +
       'VITE_AIRTABLE_TOKEN with your Personal Access Token, ' +

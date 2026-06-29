@@ -1,11 +1,18 @@
 // Packing slip parser — vendor XLSX or CSV → structured container object.
 //
-// Two formats are auto-detected:
-//   Bag format  — one SKU per carton (STYLE + COLOR → e.g. SN36223CD-BORDEAUX)
+// Format auto-detection:
+//   Bag format  — one SKU per row (STYLE + COLOR → e.g. SN36223CD-BORDEAUX)
 //   Shoe format — size columns present (STYLE + COLOR + SIZE → e.g. NS03090LD-ADOBE-370)
 //
-// SKU validation against the NetSuite items catalog is done separately via
-// validateContainer() so the parser itself stays pure and testable.
+// Key behaviors:
+//   - Continuation rows (blank CTNS NO.) belong to the same box as the previous carton.
+//     A carton may list multiple styles (mixed carton); this is normal, not an issue.
+//   - MEAS (box dimensions) is often in a merged cell. We carry forward the last
+//     non-empty MEAS value and apply it when each carton is finalized.
+//   - PO number (column A, OFFICE.NO.) and customer description (column B, P.O.NO)
+//     are read per row and carried forward when blank.
+//   - SKU validation against the NetSuite catalog is done separately via
+//     validateContainer() so this parser stays pure and testable.
 
 import * as XLSX from 'xlsx'
 
@@ -24,7 +31,7 @@ function encodeSize(sizeStr) {
   return String(Math.round(n * 10))
 }
 
-// '52×38×51', '52x38x51', '52 X 38 X 51' → { dimsCm, dimsIn } or null
+// '52×38×51', '52x38x51', '60*40*43' → { dimsCm, dimsIn } or null
 function parseDims(raw) {
   if (!raw) return null
   const nums = String(raw).match(/[\d.]+/g)
@@ -34,9 +41,9 @@ function parseDims(raw) {
   return {
     dimsCm: { l, w, h },
     dimsIn: {
-      l: +(l * CM_TO_IN).toFixed(1),
-      w: +(w * CM_TO_IN).toFixed(1),
-      h: +(h * CM_TO_IN).toFixed(1),
+      l: Math.ceil(l * CM_TO_IN),
+      w: Math.ceil(w * CM_TO_IN),
+      h: Math.ceil(h * CM_TO_IN),
     },
   }
 }
@@ -69,14 +76,28 @@ function mapHeaders(row) {
   for (let i = 0; i < row.length; i++) {
     const h = String(row[i] ?? '').toUpperCase().trim()
     if (!h) continue
-    if ((h.includes('CTNS') || (h.includes('CARTON') && h.includes('NO'))) && !h.includes('TOTAL')) {
-      m.cartonNo = m.cartonNo ?? i
+    // Column A — order number (OFFICE.NO. / 我司定单号)
+    if (h.includes('OFFICE') || h === '我司定单号') {
+      m.poNumber = m.poNumber ?? i
+    // Column B — customer PO / description (P.O.NO / PO号)
+    } else if (h.startsWith('P.O') || h === 'PO号' || h === 'PO NO') {
+      m.poDesc = m.poDesc ?? i
+    // Carton number or range (CTNS NO.)
+    } else if ((h.includes('CTNS') && h.includes('NO')) || (h.includes('CARTON') && h.includes('NO'))) {
+      if (!h.includes('TOTAL')) m.cartonNo = m.cartonNo ?? i
+    // Style name
     } else if (h.includes('STYLE')) {
       m.styleNo = m.styleNo ?? i
+    // Color
     } else if (h.includes('COLOR')) {
       m.color = m.color ?? i
-    } else if (h.includes('QTY') && (h.includes('CTN') || h.includes('CARTON') || h.includes('PCS'))) {
+    // Qty per carton (PACK/CTN or QTY/CTN)
+    } else if (
+      h.startsWith('PACK') ||
+      (h.includes('QTY') && (h.includes('CTN') || h.includes('PCS')))
+    ) {
       m.qtyPerCtn = m.qtyPerCtn ?? i
+    // Box measurements
     } else if (h.includes('MEAS') && !h.includes('TOTAL') && !h.includes('CBM')) {
       m.dims = m.dims ?? i
     } else {
@@ -96,7 +117,7 @@ function getSizeCols(colMap) {
 
 // ── Main parser ───────────────────────────────────────────────────────────────
 
-export function parsePackingSlip(data, { containerNum, whCode = 'WH1' } = {}) {
+export function parsePackingSlip(data, { containerNum, containerDate = null, whCode = 'WH1' } = {}) {
   let rows
 
   if (typeof data === 'string') {
@@ -116,120 +137,162 @@ export function parsePackingSlip(data, { containerNum, whCode = 'WH1' } = {}) {
   const sizeCols = getSizeCols(colMap)
   const isShoe   = sizeCols.length >= 3
 
-  // Extract PO number from the metadata rows above the table
-  let poNumber = null
-  for (let i = 0; i < headerIdx && !poNumber; i++) {
-    const row = rows[i]
-    for (let j = 0; j < row.length - 1; j++) {
-      const label = String(row[j] ?? '').toUpperCase()
-      if (label.includes('P.O') || label.includes('PO NO') || label.includes('PO#') || label.includes('ORDER NO')) {
-        const val = String(row[j + 1] ?? '').trim()
-        if (val && val.length > 2 && !/date|no\.?$/i.test(val)) { poNumber = val; break }
-      }
-    }
-  }
+  // ── State carried across rows ─────────────────────────────────────────────
+  let currentPO       = null  // column A (OFFICE.NO.); carried forward when blank
+  let currentCustomer = null  // column B (P.O.NO);     carried forward when blank
+  let lastMeas        = null  // MEAS column; carried forward to handle merged cells
+  let pendingCarton   = null  // { ctnsRange, po, customer, skuEntries, issues?, multiPOs? }
 
   const boxes = []
 
-  for (let i = headerIdx + 1; i < rows.length; i++) {
-    const row = rows[i]
-    if (!colMap.cartonNo && !colMap.styleNo) continue
+  // Emit box records for a completed carton group.
+  // Reads lastMeas from the closure — the MEAS that was current BEFORE this
+  // carton's own row updated it, which is correct because:
+  //   - The new carton row triggers this finalization
+  //   - Then lastMeas is updated from that row
+  //   - So the new carton's MEAS applies when it is finalized by the NEXT carton row
+  function finalizeCarton(carton) {
+    const cartonNums = expandRange(carton.ctnsRange)
+    const dims       = parseDims(lastMeas)
+    const baseIssues = dims ? [] : ['DIMS_MISSING']
+    const allIssues  = [...baseIssues, ...(carton.issues ?? [])]
 
-    const cartonCell = String(row[colMap.cartonNo] ?? '').trim()
-    const styleCell  = String(row[colMap.styleNo]  ?? '').trim()
-    const colorCell  = String(row[colMap.color]    ?? '').trim()
+    for (const cartonNum of cartonNums) {
+      const boxNum = String(cartonNum).padStart(3, '0')
+      const skus   = carton.skuEntries
 
-    // Skip blank rows and repeated headers
-    if (!cartonCell && !styleCell) continue
-    if (/^ctns?\s*no/i.test(cartonCell) || /^style\s*no/i.test(styleCell)) continue
-    // Stop at totals row
-    if (/total/i.test(cartonCell) || /total/i.test(styleCell)) break
-
-    const cartonNums = expandRange(cartonCell)
-    if (cartonNums.length === 0) continue
-
-    const normColor  = normalizeColor(colorCell)
-    const dimsData   = parseDims(String(row[colMap.dims] ?? ''))
-    const qtyPerCtn  = parseInt(String(row[colMap.qtyPerCtn] ?? '')) || 0
-    const baseIssues = dimsData ? [] : ['DIMS_MISSING']
-
-    if (isShoe) {
-      for (const cartonNum of cartonNums) {
-        const boxNum = String(cartonNum).padStart(3, '0')
-
-        const skus = sizeCols
-          .map(({ size, colIdx }) => {
-            const qty = parseInt(String(row[colIdx] ?? '')) || 0
-            if (qty === 0) return null
-            const encoded = encodeSize(size)
-            return encoded ? { sku: `${styleCell}-${normColor}-${encoded}`, qty } : null
-          })
-          .filter(Boolean)
-
-        const issues = [...baseIssues]
-        if (skus.length === 0) issues.push('SKU_NOT_FOUND')
-        if (skus.length > 1)   issues.push('MULTI_SKU')
-
-        boxes.push({
-          id:          `box-${containerNum}-${cartonNum}`,
-          cartonId:    `${containerNum}-${boxNum}`,
-          binId:       `${whCode}-${containerNum}-${boxNum}`,
-          sku:         skus.length === 1 ? skus[0].sku : null,
-          skus,
-          qty:         skus.reduce((s, e) => s + e.qty, 0) || qtyPerCtn,
-          dimsCm:      dimsData?.dimsCm ?? null,
-          dimsIn:      dimsData?.dimsIn ?? null,
-          issues,
-          skuOverride: null,
-          styleNo:     styleCell,
-          colorNorm:   normColor,
-        })
-      }
-    } else {
-      // Bag format
-      const sku    = styleCell && normColor ? `${styleCell}-${normColor}` : null
-      const issues = [...baseIssues]
-      if (!sku) issues.push('SKU_NOT_FOUND')
-
-      for (const cartonNum of cartonNums) {
-        const boxNum = String(cartonNum).padStart(3, '0')
-        boxes.push({
-          id:          `box-${containerNum}-${cartonNum}`,
-          cartonId:    `${containerNum}-${boxNum}`,
-          binId:       `${whCode}-${containerNum}-${boxNum}`,
-          sku,
-          skus:        sku ? [{ sku, qty: qtyPerCtn }] : [],
-          qty:         qtyPerCtn,
-          dimsCm:      dimsData?.dimsCm ?? null,
-          dimsIn:      dimsData?.dimsIn ?? null,
-          issues:      [...issues],
-          skuOverride: null,
-          styleNo:     styleCell,
-          colorNorm:   normColor,
-        })
-      }
+      boxes.push({
+        id:            `box-${containerNum}-${carton.po ?? 'XX'}-${cartonNum}`,
+        cartonId:      `${containerNum}-${carton.po ?? 'XX'}-${boxNum}`,
+        binId:         `${whCode}-${containerNum}-${carton.po ?? 'XX'}-${boxNum}`,
+        poNumber:      carton.po ?? null,
+        poDescription: carton.customer ?? null,
+        // single-sku shortcut for simpler downstream display; null for mixed cartons
+        sku:           skus.length === 1 ? skus[0].sku : null,
+        skus:          [...skus],
+        qty:           skus.reduce((s, e) => s + e.qty, 0),
+        dimsCm:        dims?.dimsCm ?? null,
+        dimsIn:        dims?.dimsIn ?? null,
+        issues:        allIssues,
+        // Only set for multi-PO cartons: all PO numbers found in this carton
+        multiPOs:      carton.multiPOs ?? null,
+        skuOverride:   null,
+      })
     }
   }
 
+  // ── Row-by-row processing ─────────────────────────────────────────────────
+  for (let i = headerIdx + 1; i < rows.length; i++) {
+    const row = rows[i]
+
+    const poNumCell  = String(row[colMap.poNumber]  ?? '').trim()
+    const poDescCell = String(row[colMap.poDesc]    ?? '').trim()
+    const cartonCell = String(row[colMap.cartonNo]  ?? '').trim()
+    const styleCell  = String(row[colMap.styleNo]   ?? '').trim()
+    const colorCell  = String(row[colMap.color]     ?? '').trim()
+    const measCell   = String(row[colMap.dims]      ?? '').trim()
+    const qtyCell    = String(row[colMap.qtyPerCtn] ?? '').trim()
+
+    // Skip completely blank rows
+    if (!cartonCell && !styleCell && !colorCell) continue
+    // Stop at totals rows
+    if (/^total/i.test(cartonCell) || (/total/i.test(styleCell) && !colorCell)) break
+    // Skip repeated header rows
+    if (/^ctns?\s*no/i.test(cartonCell) || /^style\s*no/i.test(styleCell)) continue
+
+    // Carry forward PO information
+    if (poNumCell)  currentPO       = poNumCell
+    if (poDescCell) currentCustomer = poDescCell
+
+    // Build SKU entries from this row
+    const normColor = normalizeColor(colorCell)
+    const qtyPerCtn = parseInt(qtyCell) || 0
+    let rowSkus = []
+
+    if (isShoe) {
+      rowSkus = sizeCols
+        .map(({ size, colIdx }) => {
+          const qty = parseInt(String(row[colIdx] ?? '')) || 0
+          if (qty === 0) return null
+          const encoded = encodeSize(size)
+          return encoded && styleCell ? { sku: `${styleCell}-${normColor}-${encoded}`, qty } : null
+        })
+        .filter(Boolean)
+    } else {
+      if (styleCell && normColor) {
+        rowSkus = [{ sku: `${styleCell}-${normColor}`, qty: qtyPerCtn }]
+      }
+    }
+
+    // Detect multi-PO: a new PO number appears on a continuation row (blank carton cell)
+    // while a carton is already pending. This means a single physical carton contains items
+    // committed to two different POs — tag the SKUs with their source PO so the export
+    // generator can route them to the correct Item Receipt.
+    if (poNumCell && !cartonCell && pendingCarton && pendingCarton.po !== poNumCell) {
+      rowSkus = rowSkus.map(s => ({ ...s, poNumber: poNumCell }))
+      pendingCarton.issues = pendingCarton.issues ?? []
+      if (!pendingCarton.issues.includes('MULTI_PO')) {
+        pendingCarton.issues.push('MULTI_PO')
+        pendingCarton.multiPOs = [pendingCarton.po, poNumCell]
+      } else if (!pendingCarton.multiPOs.includes(poNumCell)) {
+        pendingCarton.multiPOs.push(poNumCell)
+      }
+    }
+
+    if (cartonCell) {
+      if (pendingCarton && pendingCarton.ctnsRange === cartonCell) {
+        // Same carton range repeated — vendor didn't use a blank continuation row.
+        // Treat identically to a blank carton cell (mixed carton continuation).
+        pendingCarton.skuEntries.push(...rowSkus)
+      } else {
+        // New carton — finalize previous (using lastMeas BEFORE updating below)
+        if (pendingCarton) finalizeCarton(pendingCarton)
+        pendingCarton = {
+          ctnsRange:  cartonCell,
+          po:         currentPO,
+          customer:   currentCustomer,
+          skuEntries: [...rowSkus],
+        }
+      }
+    } else {
+      // Blank carton cell = continuation row for the current carton (mixed carton).
+      // Append this row's SKUs to the accumulating carton.
+      if (pendingCarton) pendingCarton.skuEntries.push(...rowSkus)
+    }
+
+    // Update lastMeas AFTER the carton logic above, so the value set here is
+    // used when the CURRENT carton is finalized by the NEXT carton's row.
+    if (measCell) lastMeas = measCell
+  }
+
+  // Finalize the last carton in the file
+  if (pendingCarton) finalizeCarton(pendingCarton)
+
+  // Collect unique PO numbers across all boxes (one packing slip can span multiple POs)
+  const poNumbers = [...new Set(boxes.map(b => b.poNumber).filter(Boolean))]
+
+  // Date tag makes the container ID unique across multiple imports of the same number
+  const dateTag = containerDate ? `-${containerDate.replace(/[^0-9]/g, '')}` : ''
+
   return {
-    id:          `cnt-${containerNum}`,
-    containerNum: String(containerNum),
-    poNumber:    poNumber ?? null,
-    importedAt:  new Date().toISOString(),
-    boxCount:    boxes.length,
+    id:            `cnt-${containerNum}${dateTag}`,
+    containerNum:  String(containerNum),
+    containerDate: containerDate ?? null,
+    poNumbers,
+    importedAt:    new Date().toISOString(),
+    boxCount:      boxes.length,
     boxes,
   }
 }
 
 // ── Post-parse SKU validation ─────────────────────────────────────────────────
-// Run after parsePackingSlip to stamp SKU_NOT_FOUND issues using the catalog.
+// Run after parsePackingSlip to stamp SKU_NOT_FOUND issues using the NetSuite catalog.
 // Returns a new container with updated box issues (does not mutate).
 export function validateContainer(container, netsuiteItems) {
   if (!netsuiteItems?.itemsBySku) return container
   const { itemsBySku } = netsuiteItems
 
   const boxes = container.boxes.map(box => {
-    // Strip existing SKU_NOT_FOUND so we can re-evaluate
     const issues = (box.issues ?? []).filter(i => i !== 'SKU_NOT_FOUND')
 
     const effectiveSku = box.skuOverride ?? box.sku

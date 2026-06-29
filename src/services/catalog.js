@@ -12,24 +12,68 @@
 
 const CACHE_KEY    = 'wh_sku_catalog'
 const CACHE_TS_KEY = 'wh_catalog_updated_at'
+const LOC_QTYS_KEY  = 'wh_location_qtys'
+const LOC_NAMES_KEY = 'wh_location_names'
 
 // ── Parse CSV ─────────────────────────────────────────────────────────────────
-// Pure function: NetSuite CSV text → { [sku]: { qty, name } }
-// This is the only place that knows the NetSuite CSV export format.
+// Pure function: NetSuite Warehouse Item View CSV text →
+//   { catalog: { [sku]: { qty, name } }, locationBreakdown: { [sku]: { [loc]: qty } }, locationNames: string[] }
+// Location names come from column headers dynamically — stripping the NetSuite
+// aggregate prefix ("Maximum of", "Sum of", etc.) so users can rename them freely.
 export function parseCatalogCsv(csvText) {
   const lines      = csvText.trim().split('\n')
   const catalog    = {}
+  const locationBreakdown = {}
   const skuPattern = /^[A-Z][A-Z0-9-]+$/
+
+  // Parse header row to extract location names from column 2 onwards
+  const headerCols = lines[0].trim().split(',').map(h => h.trim())
+  const locationNames = []
+  const locationColIndices = []
+  for (let ci = 2; ci < headerCols.length; ci++) {
+    const locName = headerCols[ci]
+      .replace(/^(Maximum|Minimum|Average|Sum|Count) of /i, '')
+      .trim()
+    if (locName) { locationNames.push(locName); locationColIndices.push(ci) }
+  }
+
   for (let i = 1; i < lines.length; i++) {
     const cols = lines[i].trim().split(',')
     const sku  = cols[0]?.trim()
     if (!sku || !skuPattern.test(sku)) continue
     const name = cols[1]?.trim() ?? ''
-    // Sum all 6 quantity columns (Warehouse, Virtual WH, Bloomingdales, Nordstrom, Shopbop, Saint Bernard)
-    const qty = [2, 3, 4, 5, 6, 7].reduce((s, ci) => s + (Number(cols[ci]) || 0), 0)
+
+    let qty = 0
+    const breakdown = {}
+    for (let j = 0; j < locationColIndices.length; j++) {
+      const locQty = Number(cols[locationColIndices[j]]) || 0
+      qty += locQty
+      if (locQty > 0) breakdown[locationNames[j]] = locQty
+    }
     catalog[sku] = { qty, name }
+    if (Object.keys(breakdown).length > 0) locationBreakdown[sku] = breakdown
   }
-  return catalog
+
+  return { catalog, locationBreakdown, locationNames }
+}
+
+// ── Location qty persistence ───────────────────────────────────────────────────
+export function saveLocationQtys(locationBreakdown, locationNames) {
+  try {
+    localStorage.setItem(LOC_QTYS_KEY,  JSON.stringify(locationBreakdown))
+    localStorage.setItem(LOC_NAMES_KEY, JSON.stringify(locationNames))
+  } catch {}
+}
+
+export function loadLocationQtys() {
+  try {
+    return {
+      locationBreakdown: JSON.parse(localStorage.getItem(LOC_QTYS_KEY))  ?? {},
+      locationNames:     JSON.parse(localStorage.getItem(LOC_NAMES_KEY)) ?? [],
+    }
+  } catch {
+    return { locationBreakdown: {}, locationNames: [] }
+  }
 }
 
 // ── Load ─────────────────────────────────────────────────────────────────────

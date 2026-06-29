@@ -1,32 +1,51 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { parsePackingSlip, validateContainer } from '../../services/packingSlip'
-import { parseNetsuiteItemsCsv, saveNetsuiteItems } from '../../services/netsuiteItems'
 import BinLabel from '../BinLabel/BinLabel'
 import BoxCard from './BoxCard'
 import StagingCanvas from './StagingCanvas'
 
-const fmtDate = (iso) => {
-  if (!iso) return null
-  try {
-    return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-  } catch { return iso }
+// Convert a staging box's physical dimensions to the feet-based format BinLabel expects.
+// dimsIn is already ceil'd to whole inches; dividing by 12 gives feet for BinLabel.
+function boxLabelDims(box) {
+  if (box.dimsIn) {
+    return { binW: box.dimsIn.l / 12, binD: box.dimsIn.w / 12, binH: box.dimsIn.h / 12 }
+  }
+  if (box.dimsCm) {
+    return {
+      binW: Math.ceil(box.dimsCm.l / 2.54) / 12,
+      binD: Math.ceil(box.dimsCm.w / 2.54) / 12,
+      binH: Math.ceil(box.dimsCm.h / 2.54) / 12,
+    }
+  }
+  return {}
 }
 
 function issueSummary(boxes) {
   const skuBad  = boxes.filter(b => b.issues.includes('SKU_NOT_FOUND')).length
   const dimsBad = boxes.filter(b => b.issues.includes('DIMS_MISSING')).length
-  const valid   = boxes.length - skuBad - dimsBad
-  return { skuBad, dimsBad, valid }
+  const multiPO = boxes.filter(b => b.issues.includes('MULTI_PO')).length
+  const valid   = boxes.filter(b => b.issues.length === 0).length
+  return { skuBad, dimsBad, multiPO, valid }
 }
 
 function StagingPanel({
   containers,
   netsuiteItems,
-  netsuiteUpdatedAt,
   onImportContainer,
+  onUpdateContainer,
   onUpdateBox,
   onDeleteContainer,
-  onNetsuiteItemsUpdated,
+  onReceiveContainer,
+  onSyncToAirtable,
+  syncStatus = 'idle',
+  syncError = null,
+  onImportPOCsv,
+  poImportStatus = 'idle',
+  poImportError = null,
+  poImportResult = null,
+  onExportInventoryTransfer,
+  hasPOLocations = false,
+  poLocations = {},
 }) {
   const [selectedId, setSelectedId]   = useState(null)
   const [selectedBoxId, setSelectedBoxId] = useState(null)
@@ -34,16 +53,40 @@ function StagingPanel({
   const [importError, setImportError] = useState(null)
   const [view3D, setView3D]           = useState(false)
   const [confirmDeleteId, setConfirmDeleteId] = useState(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [focusedPO, setFocusedPO]     = useState(null)
 
   // Auto-select first container
   useEffect(() => {
     if (containers.length > 0 && !selectedId) setSelectedId(containers[0].id)
   }, [containers, selectedId])
 
+  // Reset focused PO when switching containers
+  useEffect(() => { setFocusedPO(null) }, [selectedId])
+
   const selectedContainer = containers.find(c => c.id === selectedId) ?? null
   const selectedBox = selectedContainer?.boxes.find(b => b.id === selectedBoxId) ?? null
 
+  const filteredBoxes = useMemo(() => {
+    const all = selectedContainer?.boxes ?? []
+    const q = searchQuery.trim().toUpperCase()
+    if (!q) return all
+    return all.filter(box => {
+      if ((box.poNumber ?? '').toUpperCase().includes(q)) return true
+      if ((box.skuOverride ?? box.sku ?? '').toUpperCase().includes(q)) return true
+      if (box.skus?.some(s => s.sku?.toUpperCase().includes(q))) return true
+      return false
+    })
+  }, [selectedContainer?.boxes, searchQuery])
+
   // ── File handlers ──────────────────────────────────────────────────────────
+
+  const handlePOFile = async (e) => {
+    const file = e.target.files[0]
+    e.target.value = ''
+    if (!file || !onImportPOCsv) return
+    onImportPOCsv(await file.text())
+  }
 
   const handleSlipFile = async (e) => {
     const file = e.target.files[0]
@@ -51,45 +94,31 @@ function StagingPanel({
     if (!file) return
     setImportError(null)
 
-    // Prompt for container number
-    const containerNum = window.prompt('Enter the container number (e.g. 264):')
-    if (!containerNum) return
+    const containerNum = window.prompt('Enter the shipping container number (e.g. 264):')
+    if (!containerNum?.trim()) return
+
+    // Date is metadata only — it never appears in the bin ID.
+    // It makes the container record unique so two imports of "264" on different days coexist.
+    const today = new Date().toLocaleDateString('en-CA')  // YYYY-MM-DD
+    const rawDate = window.prompt('Enter arrival / import date (leave blank for today):', today)
+    if (rawDate === null) return  // user pressed Cancel
+    const containerDate = rawDate.trim() || today
 
     try {
+      const opts = { containerNum: containerNum.trim(), containerDate }
       let parsed
       if (file.name.toLowerCase().endsWith('.csv')) {
-        const text = await file.text()
-        parsed = parsePackingSlip(text, { containerNum: containerNum.trim() })
+        parsed = parsePackingSlip(await file.text(), opts)
       } else {
-        // XLSX
-        const buf = await file.arrayBuffer()
-        parsed = parsePackingSlip(buf, { containerNum: containerNum.trim() })
+        parsed = parsePackingSlip(await file.arrayBuffer(), opts)
       }
 
-      // Post-parse SKU validation against loaded catalog
       const validated = validateContainer(parsed, netsuiteItems)
       onImportContainer(validated)
       setSelectedId(validated.id)
     } catch (err) {
       setImportError(err.message)
     }
-  }
-
-  const handleItemsFile = (e) => {
-    const file = e.target.files[0]
-    e.target.value = ''
-    if (!file) return
-    const reader = new FileReader()
-    reader.onload = (ev) => {
-      try {
-        const { itemsBySku, styleColorIndex } = parseNetsuiteItemsCsv(ev.target.result)
-        const ts = saveNetsuiteItems(itemsBySku, styleColorIndex)
-        onNetsuiteItemsUpdated({ itemsBySku, styleColorIndex, updatedAt: ts })
-      } catch (err) {
-        setImportError(err.message)
-      }
-    }
-    reader.readAsText(file)
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -111,14 +140,60 @@ function StagingPanel({
           )}
         </div>
         <div className="staging-header-right">
-          <label className="btn-secondary staging-import-btn" style={{ fontSize: 11 }}>
-            {itemCount > 0
-              ? `↻ Items (${itemCount.toLocaleString()})`
-              : '↑ Import NetSuite Items'}
-            <input type="file" hidden accept=".csv" onChange={handleItemsFile} />
-          </label>
-          {netsuiteUpdatedAt && (
-            <span className="staging-ts">Updated {fmtDate(netsuiteUpdatedAt)}</span>
+          {/* PO Warehouse View CSV import */}
+          {onImportPOCsv && (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+              <label
+                className="btn-secondary staging-import-btn"
+                style={{
+                  fontSize: 11, cursor: poImportStatus === 'importing' ? 'wait' : 'pointer',
+                  color:       poImportStatus === 'done'  ? '#27ae60' : poImportStatus === 'error' ? '#c0392b' : undefined,
+                  borderColor: poImportStatus === 'done'  ? '#27ae60' : poImportStatus === 'error' ? '#c0392b' : undefined,
+                  opacity:     poImportStatus === 'importing' ? 0.6 : 1,
+                  pointerEvents: poImportStatus === 'importing' ? 'none' : 'auto',
+                }}
+              >
+                {poImportStatus === 'importing' ? 'Importing POs…'
+                  : poImportStatus === 'done'    ? `✓ ${poImportResult?.poCount ?? ''} POs Imported`
+                  : poImportStatus === 'error'   ? '✗ PO Import Failed'
+                  : '↑ Import PO CSV'}
+                <input type="file" hidden accept=".csv" onChange={handlePOFile} />
+              </label>
+              {poImportStatus === 'error' && poImportError && (
+                <span style={{ fontSize: 10, color: '#c0392b', maxWidth: 240, textAlign: 'right', lineHeight: 1.3 }}>
+                  {poImportError}
+                </span>
+              )}
+              {poImportStatus === 'done' && poImportResult && (
+                <span style={{ fontSize: 10, color: '#27ae60', textAlign: 'right' }}>
+                  {poImportResult.lineCount} lines synced to Airtable
+                </span>
+              )}
+            </div>
+          )}
+          {onSyncToAirtable && (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+              <button
+                className="btn-secondary staging-import-btn"
+                style={{
+                  fontSize: 11,
+                  color: syncStatus === 'done' ? '#27ae60' : syncStatus === 'error' ? '#c0392b' : undefined,
+                  borderColor: syncStatus === 'done' ? '#27ae60' : syncStatus === 'error' ? '#c0392b' : undefined,
+                }}
+                onClick={onSyncToAirtable}
+                disabled={syncStatus === 'syncing'}
+              >
+                {syncStatus === 'syncing' ? 'Syncing…'
+                  : syncStatus === 'done'    ? '✓ Synced'
+                  : syncStatus === 'error'   ? '✗ Sync Failed'
+                  : '↑ Sync to Airtable'}
+              </button>
+              {syncStatus === 'error' && syncError && (
+                <span style={{ fontSize: 10, color: '#c0392b', maxWidth: 260, textAlign: 'right', lineHeight: 1.3 }}>
+                  {syncError}
+                </span>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -133,17 +208,20 @@ function StagingPanel({
             <p className="staging-empty">No containers imported yet.<br/>Import a packing slip to get started.</p>
           )}
           {containers.map(cnt => {
-            const { skuBad, dimsBad } = issueSummary(cnt.boxes)
-            const hasIssues = skuBad + dimsBad > 0
+            const { skuBad, dimsBad, multiPO } = issueSummary(cnt.boxes)
+            const hasIssues = skuBad + dimsBad + multiPO > 0
             return (
               <div
                 key={cnt.id}
                 className={`staging-cnt-item${cnt.id === selectedId ? ' selected' : ''}`}
                 onClick={() => { setSelectedId(cnt.id); setSelectedBoxId(null) }}
               >
-                <div className="staging-cnt-num">{cnt.containerNum}</div>
+                <div className="staging-cnt-num">
+                  {cnt.containerNum}
+                  {cnt.containerDate && <span className="staging-cnt-date">{cnt.containerDate}</span>}
+                </div>
                 <div className="staging-cnt-meta">
-                  {cnt.poNumber && <span className="staging-cnt-po">{cnt.poNumber}</span>}
+                  {cnt.poNumbers?.length > 0 && <span className="staging-cnt-po">{cnt.poNumbers.join(', ')}</span>}
                   <div className="staging-cnt-badges">
                     <span className="staging-cnt-count">{cnt.boxCount} boxes</span>
                     {hasIssues && (
@@ -170,9 +248,42 @@ function StagingPanel({
               <div className="staging-detail-header">
                 <div className="staging-detail-title">
                   <span className="staging-detail-num">Container {selectedContainer.containerNum}</span>
-                  {selectedContainer.poNumber && (
-                    <span className="staging-detail-po">{selectedContainer.poNumber}</span>
+                  {selectedContainer.containerDate && (
+                    <span className="staging-detail-date">{selectedContainer.containerDate}</span>
                   )}
+                  {selectedContainer.poNumbers?.length > 0 && (
+                    <span className="staging-detail-po">
+                      {selectedContainer.poNumbers.map((po, i) => (
+                        <span key={po}>
+                          {i > 0 && <span style={{ opacity: 0.4 }}> · </span>}
+                          <span
+                            className={`staging-po-chip${focusedPO === po ? ' active' : ''}`}
+                            title="Click to focus in 3D view"
+                            onClick={() => { setView3D(true); setFocusedPO(prev => prev === po ? null : po) }}
+                          >
+                            {po}
+                          </span>
+                        </span>
+                      ))}
+                    </span>
+                  )}
+                  {/* Item Receipt / Transfer Order override fields */}
+                  <span className="staging-ir-to">
+                    <input
+                      className="staging-ir-input"
+                      placeholder="IR number"
+                      value={selectedContainer.itemReceiptNum ?? ''}
+                      onChange={e => onUpdateContainer?.(selectedContainer.id, { itemReceiptNum: e.target.value || null })}
+                      title="NetSuite Item Receipt number (e.g. IR12345)"
+                    />
+                    <input
+                      className="staging-ir-input"
+                      placeholder="TO number"
+                      value={selectedContainer.transferOrderNum ?? ''}
+                      onChange={e => onUpdateContainer?.(selectedContainer.id, { transferOrderNum: e.target.value || null })}
+                      title="NetSuite Transfer Order number (e.g. TO67890)"
+                    />
+                  </span>
                 </div>
                 <div className="staging-detail-actions">
                   <button
@@ -181,6 +292,33 @@ function StagingPanel({
                     title="Toggle 3D view"
                   >
                     {view3D ? '≡ List' : '⬛ 3D'}
+                  </button>
+                  {onExportInventoryTransfer && (
+                    <button
+                      className="btn-secondary"
+                      style={{ fontSize: 11, padding: '4px 10px' }}
+                      title={hasPOLocations
+                        ? 'Download Item Receipt + Transfer Order CSVs for NetSuite import'
+                        : 'Import PO CSV first to get destination locations for Transfer Orders'}
+                      onClick={() => onExportInventoryTransfer(selectedContainer)}
+                    >
+                      ↓ Export to NetSuite
+                    </button>
+                  )}
+                  <button
+                    className="btn-primary"
+                    style={{ fontSize: 11, padding: '4px 10px', width: 'auto', background: '#27ae60', borderColor: '#27ae60' }}
+                    onClick={() => {
+                      if (window.confirm(
+                        `Receive container ${selectedContainer.containerNum} into warehouse?\n\n` +
+                        `This will create ${selectedContainer.boxCount} unassigned bins in the warehouse tab ` +
+                        `and remove the container from staging.`
+                      )) {
+                        onReceiveContainer?.(selectedContainer.id)
+                      }
+                    }}
+                  >
+                    ✓ Receive
                   </button>
                   <button
                     className="btn-secondary"
@@ -194,10 +332,15 @@ function StagingPanel({
 
               {/* Issue summary bar */}
               {(() => {
-                const { skuBad, dimsBad, valid } = issueSummary(selectedContainer.boxes)
+                const { skuBad, dimsBad, multiPO, valid } = issueSummary(selectedContainer.boxes)
                 return (
                   <div className="staging-issue-bar">
                     <span className="staging-issue-stat ok">✓ {valid} valid</span>
+                    {multiPO > 0 && (
+                      <span className="staging-issue-stat crit">
+                        ⊘ {multiPO} multi-PO carton{multiPO !== 1 ? 's' : ''} — needs clarification
+                      </span>
+                    )}
                     {skuBad > 0 && (
                       <span className="staging-issue-stat warn">⚠ {skuBad} SKU unmatched</span>
                     )}
@@ -211,16 +354,40 @@ function StagingPanel({
                 )
               })()}
 
+              {/* Search bar */}
+              <div className="staging-search-bar">
+                <input
+                  type="text"
+                  className="staging-search-input"
+                  placeholder="Search by PO number or SKU…"
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                />
+                {searchQuery && (
+                  <button className="staging-search-clear" onClick={() => setSearchQuery('')}>✕</button>
+                )}
+                {searchQuery && (
+                  <span className="staging-search-count">
+                    {/^\d+$/.test(searchQuery.trim())
+                      ? `${filteredBoxes.length} box${filteredBoxes.length !== 1 ? 'es' : ''}`
+                      : `${filteredBoxes.length} matched`}
+                    {' '}/ {selectedContainer.boxes.length}
+                  </span>
+                )}
+              </div>
+
               {/* 3D canvas or list view */}
               {view3D ? (
                 <StagingCanvas
                   boxes={selectedContainer.boxes}
                   onSelectBox={(box) => setSelectedBoxId(box?.id ?? null)}
                   selectedBoxId={selectedBoxId}
+                  searchQuery={searchQuery}
+                  focusPO={focusedPO}
                 />
               ) : (
                 <BoxList
-                  boxes={selectedContainer.boxes}
+                  boxes={filteredBoxes}
                   selectedBoxId={selectedBoxId}
                   onSelectBox={(id) => setSelectedBoxId(id)}
                   onPrintLabel={(box) => {
@@ -228,6 +395,7 @@ function StagingPanel({
                       id:    box.id,
                       binId: box.binId,
                       skus:  box.skus.map((s, i) => ({ id: `${box.id}_${i}`, sku: s.sku, qty: s.qty })),
+                      ...boxLabelDims(box),
                     })
                   }}
                 />
@@ -241,6 +409,7 @@ function StagingPanel({
           <BoxCard
             box={selectedBox}
             netsuiteItems={netsuiteItems}
+            poLocations={poLocations}
             onClose={() => setSelectedBoxId(null)}
             onUpdateBox={(boxId, updates) => onUpdateBox(selectedContainer.id, boxId, updates)}
             onPrintLabel={(box) => {
@@ -248,6 +417,7 @@ function StagingPanel({
                 id:    box.id,
                 binId: box.binId,
                 skus:  box.skus.map((s, i) => ({ id: `${box.id}_${i}`, sku: s.sku, qty: s.qty })),
+                ...boxLabelDims(box),
               })
             }}
           />
@@ -298,7 +468,7 @@ function BoxList({ boxes, selectedBoxId, onSelectBox, onPrintLabel }) {
       {boxes.map(box => {
         const hasSkuIssue  = box.issues.includes('SKU_NOT_FOUND')
         const hasDimsIssue = box.issues.includes('DIMS_MISSING')
-        const isMultiSku   = box.issues.includes('MULTI_SKU')
+        const hasMultiPO   = box.issues.includes('MULTI_PO')
         const isSelected   = box.id === selectedBoxId
 
         const primarySku = box.skuOverride ?? box.sku
@@ -309,18 +479,19 @@ function BoxList({ boxes, selectedBoxId, onSelectBox, onPrintLabel }) {
             key={box.id}
             className={[
               'box-item',
-              isSelected     ? 'selected'   : '',
-              hasSkuIssue    ? 'issue-sku'  : '',
-              hasDimsIssue   ? 'issue-dims' : '',
+              isSelected   ? 'selected'       : '',
+              hasMultiPO   ? 'issue-multi-po' : '',
+              hasSkuIssue  ? 'issue-sku'      : '',
+              hasDimsIssue ? 'issue-dims'     : '',
             ].filter(Boolean).join(' ')}
             onClick={() => onSelectBox(isSelected ? null : box.id)}
           >
             <div className="box-item-row">
               <span className="box-bin-id">{box.binId}</span>
               <div className="box-item-badges">
+                {hasMultiPO   && <span className="issue-badge crit">MULTI PO</span>}
                 {hasSkuIssue  && <span className="issue-badge warn">SKU?</span>}
                 {hasDimsIssue && <span className="issue-badge err">DIMS?</span>}
-                {isMultiSku   && <span className="issue-badge info">MULTI</span>}
               </div>
               <button
                 className="box-print-btn"
@@ -331,13 +502,17 @@ function BoxList({ boxes, selectedBoxId, onSelectBox, onPrintLabel }) {
               </button>
             </div>
             <div className="box-item-meta">
-              <span className="box-sku">{primarySku ?? '—'}</span>
+              <span className="box-sku">{primarySku ?? '—'}{box.skus?.length > 1 ? ` +${box.skus.length - 1}` : ''}</span>
               <span className="box-qty">{box.qty} units</span>
               {box.dimsCm && (
                 <span className="box-dims">
                   {box.dimsCm.l}×{box.dimsCm.w}×{box.dimsCm.h} cm
                 </span>
               )}
+              {hasMultiPO
+                ? <span className="box-po multi-po-label">PO {box.multiPOs?.join(' + ')}</span>
+                : box.poNumber && <span className="box-po">PO {box.poNumber}</span>
+              }
             </div>
           </div>
         )

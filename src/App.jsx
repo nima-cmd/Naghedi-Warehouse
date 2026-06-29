@@ -1,12 +1,22 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import TopBar from './components/TopBar/TopBar'
 import Canvas from './components/Canvas/Canvas'
 import ControlPanel from './components/ControlPanel/ControlPanel'
 import StagingPanel from './components/Staging/StagingPanel'
+import WalkMode from './components/WalkMode/WalkMode'
 import { loadLayout, saveLayout } from './services/airtable'
-import { parseCatalogCsv, loadCatalog, saveCatalog } from './services/catalog'
-import { loadNetsuiteItems } from './services/netsuiteItems'
-import { loadContainers, saveContainers } from './services/containers'
+import { parseCatalogCsv, loadCatalog, saveCatalog, saveLocationQtys, loadLocationQtys } from './services/catalog'
+import { loadNetsuiteItems, parseNetsuiteItemsCsv, saveNetsuiteItems } from './services/netsuiteItems'
+import {
+  loadContainers,
+  saveContainers,
+  loadContainersFromAirtable,
+  saveContainerToAirtable,
+  deleteContainerFromAirtable,
+  updateContainerIRTOInAirtable,
+} from './services/containers'
+import { importPOsToAirtable, parsePOWarehouseViewCsv, savePOLineDataLocally, loadPOLineData } from './services/poImport'
+import { savePOLocationsLocally, loadPOLocations, generateNetSuiteExport, downloadCSV } from './services/exportGenerator'
 import './App.css'
 
 // Generate one bin record per rack slot.
@@ -70,16 +80,54 @@ function App() {
   const [dimChangeKey, setDimChangeKey] = useState(0)
 
   // ── Staging module state ───────────────────────────────────────────────────
-  const [activeTab, setActiveTab]           = useState('warehouse')  // 'warehouse' | 'staging'
+  const [activeTab, setActiveTab]           = useState('warehouse')  // 'warehouse' | 'staging' | 'walk'
   const [containers, setContainers]         = useState([])
   const [netsuiteItems, setNetsuiteItems]   = useState(null)         // { itemsBySku, styleColorIndex }
   const [netsuiteUpdatedAt, setNetsuiteUpdatedAt] = useState(null)
+  const [containerSyncStatus, setContainerSyncStatus] = useState('idle') // 'idle'|'syncing'|'done'|'error'
+  const [containerSyncError, setContainerSyncError]   = useState(null)
+  const [poImportStatus, setPoImportStatus]           = useState('idle') // 'idle'|'importing'|'done'|'error'
+  const [poImportError, setPoImportError]             = useState(null)
+  const [poImportResult, setPoImportResult]           = useState(null)   // { poCount, lineCount }
+  const [poLocations, setPoLocations]                 = useState(() => loadPOLocations())
+  const [poLineData, setPoLineData]                   = useState(() => loadPOLineData())
+  // Modal shown when IR export detects shipped qty > PO ordered qty for any SKU
+  const [overReceiveWarning, setOverReceiveWarning]   = useState(null) // { items, proceed }
+  // Per-location stock breakdown from the Warehouse Item View CSV
+  const [locationQtys,  setLocationQtys]  = useState(() => loadLocationQtys().locationBreakdown)
+  const [locationNames, setLocationNames] = useState(() => loadLocationQtys().locationNames)
 
-  // ── Load staging data from localStorage on mount ─────────────────────────
+  // ── Load staging data — localStorage immediately, then Airtable in background ─
   useEffect(() => {
+    // Show cached data instantly so the panel isn't blank while Airtable loads
     setContainers(loadContainers())
     const ni = loadNetsuiteItems()
     if (ni) { setNetsuiteItems(ni); setNetsuiteUpdatedAt(ni.updatedAt) }
+
+    // Then sync with Airtable
+    loadContainersFromAirtable()
+      .then(atContainers => {
+        if (atContainers.length > 0) {
+          // Airtable has data — use it as source of truth
+          setContainers(atContainers)
+        } else {
+          // Airtable is empty — push any locally-cached containers that haven't synced yet
+          const local = loadContainers()
+          const unsynced = local.filter(c => !c.airtableId)
+          for (const c of unsynced) {
+            saveContainerToAirtable(c)
+              .then(synced => {
+                setContainers(prev => {
+                  const next = prev.map(p => p.id === c.id ? synced : p)
+                  saveContainers(next)
+                  return next
+                })
+              })
+              .catch(err => console.warn('Container backfill sync failed:', err.message))
+          }
+        }
+      })
+      .catch(err => console.warn('Containers Airtable load failed, using local cache:', err.message))
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Load layout from Airtable on mount ────────────────────────────────────
@@ -94,6 +142,8 @@ function App() {
             { code: 'WH1', name: 'Warehouse 1', width: 25, depth: 100 },
             { code: 'WH2', name: 'Warehouse 2', width: 25, depth: 100 },
           ]).map(wh => ({ width: 25, depth: 100, ...wh })))  // back-compat: add dims to old saves
+          // Force Canvas to remount with the loaded dimensions so the 3D view matches
+          setDimChangeKey(k => k + 1)
           setRacks(layout.racks ?? [])
           setBins(layout.bins ?? [])
           setRackCounters(layout.rackCounters ?? { 0: 0, 1: 0 })
@@ -126,6 +176,31 @@ function App() {
   useEffect(() => {
     if (initialLoadDone.current) setIsDirty(true)
   }, [racks, bins, warehouses, rooms])
+
+  // On small screens default to Walk tab — the 3D canvas is unusable on a phone
+  useEffect(() => {
+    if (window.innerWidth < 768) setActiveTab('walk')
+  }, [])
+
+  // Assign a stable hex color to each unique Final Naghedi Destination name found in
+  // the PO data. Colors come from a fixed 8-slot palette; TBD is always a warning amber.
+  // These are passed to both Canvas (3D bin tinting) and ControlPanel (legend + picker).
+  const LOCATION_PALETTE = [0xb5783c, 0x27ae60, 0x8e44ad, 0x2980b9, 0xd35400, 0x7f8c8d, 0x1abc9c, 0x6c3483]
+  //  index 0: Brown  — Warehouse
+  //  index 1: Green  — Virtual Warehouse
+  //  index 2: Purple — Bloomingdales
+  //  index 3: Blue   — Nordstrom
+  //  index 4: Orange — Shopbop
+  //  index 5: Grey   — Saint Bernard
+  const TBD_LOC_COLOR = 0xb8860b
+  const locationColors = useMemo(() => {
+    const colors = { TBD: TBD_LOC_COLOR }
+    let idx = 0
+    for (const loc of locationNames) {
+      if (!colors[loc]) { colors[loc] = LOCATION_PALETTE[idx % LOCATION_PALETTE.length]; idx++ }
+    }
+    return colors
+  }, [locationNames]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleUpdateWarehouseName = (index, name) => {
     setWarehouses(prev => prev.map((wh, i) => i === index ? { ...wh, name } : wh))
@@ -295,6 +370,26 @@ function App() {
     setSelectedBinId(null)
   }
 
+  // Create a rack from a text form (Walk Mode) — no 3D canvas click needed.
+  // The rack is placed at (0,0) and can be repositioned in the 3D view on desktop later.
+  const handleCreateRackManual = (whIndex, rackId, cols, rows) => {
+    const newCount = (rackCounters[whIndex] ?? 0) + 1
+    const newRack = {
+      id: `rack_${Date.now()}`,
+      rackId: rackId.trim().toUpperCase(),
+      whIndex,
+      localX: 0,
+      localZ: 0,
+      cols,
+      rows,
+      rotated: false,
+    }
+    setRacks(prev => [...prev, newRack])
+    setBins(prev => [...prev, ...generateBinsForRack(newRack)])
+    setRackCounters(prev => ({ ...prev, [whIndex]: newCount }))
+    setIsDirty(true)
+  }
+
   const handleMoveRack = (id) => {
     const rack = racks.find(r => r.id === id)
     if (!rack) return
@@ -373,19 +468,23 @@ function App() {
       }, 0)
     , 0)
 
-  // If the same SKU is added again to the same bin, we merge by adding quantities
-  // rather than creating a duplicate entry — one row per SKU keeps the list readable.
+  // Adds units of a SKU to a bin, tagged with a destination location (defaults to 'TBD').
+  // Entries are keyed by (sku, location) — same sku+location merges; different location = new row.
   // If catalog is loaded and adding would exceed total on record, we intercept with a warning.
-  const handleAddSku = (binId, sku, qty) => {
+  const handleAddSku = (binId, sku, qty, location = 'TBD') => {
+    const loc = location || 'TBD'
     const doAdd = () => {
       const now = new Date().toISOString()
       setBins(prev => prev.map(b => {
         if (b.id !== binId) return b
         const skus = b.skus ?? []
-        if (skus.some(s => s.sku === sku)) {
-          return { ...b, updatedAt: now, skus: skus.map(s => s.sku === sku ? { ...s, qty: s.qty + qty } : s) }
+        // Match on both sku and location so each (sku, destination) pair is its own row
+        const existing = skus.find(s => s.sku === sku && (s.location ?? 'TBD') === loc)
+        if (existing) {
+          return { ...b, updatedAt: now, skus: skus.map(s => s === existing ? { ...s, qty: s.qty + qty } : s) }
         }
-        return { ...b, updatedAt: now, skus: [...skus, { id: `${binId}_${sku}`, sku, qty }] }
+        const id = `${binId}_${sku}_${loc}_${Date.now()}`
+        return { ...b, updatedAt: now, skus: [...skus, { id, sku, qty, location: loc }] }
       }))
     }
 
@@ -407,6 +506,31 @@ function App() {
     setBins(prev => prev.map(b =>
       b.id === binId ? { ...b, updatedAt: now, skus: (b.skus ?? []).filter(s => s.id !== skuId) } : b
     ))
+  }
+
+  // Change the location on an existing SKU entry. If another entry for the same
+  // (sku, newLocation) already exists, merge by adding qty and removing this one.
+  const handleUpdateSkuLocation = (binId, skuId, newLocation) => {
+    const loc = newLocation || 'TBD'
+    const now = new Date().toISOString()
+    setBins(prev => prev.map(b => {
+      if (b.id !== binId) return b
+      const skus = b.skus ?? []
+      const target = skus.find(s => s.id === skuId)
+      if (!target) return b
+      // Check if there's already an entry with the same sku + new location
+      const existing = skus.find(s => s.id !== skuId && s.sku === target.sku && (s.location ?? 'TBD') === loc)
+      if (existing) {
+        // Merge: add qty to existing, remove target
+        return {
+          ...b, updatedAt: now,
+          skus: skus
+            .filter(s => s.id !== skuId)
+            .map(s => s.id === existing.id ? { ...s, qty: s.qty + target.qty } : s),
+        }
+      }
+      return { ...b, updatedAt: now, skus: skus.map(s => s.id === skuId ? { ...s, location: loc } : s) }
+    }))
   }
 
   const handleUpdateSkuQty = (binId, skuId, newQty) => {
@@ -438,10 +562,13 @@ function App() {
   // When NetSuite API is available, replace this handler with an API fetch that calls
   // saveCatalog() with the same catalog shape — the rest of the app stays unchanged.
   const handleImportCsv = (csvText) => {
-    const catalog = parseCatalogCsv(csvText)
+    const { catalog, locationBreakdown, locationNames: locNames } = parseCatalogCsv(csvText)
     setSkuCatalog(catalog)
     const ts = saveCatalog(catalog)
     setCatalogUpdatedAt(ts)
+    saveLocationQtys(locationBreakdown, locNames)
+    setLocationQtys(locationBreakdown)
+    setLocationNames(locNames)
     setIsDirty(true)
   }
 
@@ -474,11 +601,22 @@ function App() {
 
   // ── Staging handlers ──────────────────────────────────────────────────────
   const handleImportContainer = (parsed) => {
+    // Save to localStorage immediately so the UI updates without waiting for Airtable
     setContainers(prev => {
       const next = [...prev.filter(c => c.id !== parsed.id), parsed]
       saveContainers(next)
       return next
     })
+    // Sync to Airtable in background — stamp airtableId back once created
+    saveContainerToAirtable(parsed)
+      .then(synced => {
+        setContainers(prev => {
+          const next = prev.map(c => c.id === parsed.id ? synced : c)
+          saveContainers(next)
+          return next
+        })
+      })
+      .catch(err => console.warn('Container Airtable sync failed:', err.message))
   }
 
   const handleUpdateContainerBox = (containerId, boxId, updates) => {
@@ -492,17 +630,151 @@ function App() {
     })
   }
 
+  const handleUpdateContainer = (id, updates) => {
+    let syncTarget = null
+    setContainers(prev => {
+      const next = prev.map(c => {
+        if (c.id !== id) return c
+        const updated = { ...c, ...updates }
+        // Capture for Airtable sync below — done inside setter so we get the merged object
+        if (('itemReceiptNum' in updates || 'transferOrderNum' in updates) && updated.airtableId) {
+          syncTarget = updated
+        }
+        return updated
+      })
+      saveContainers(next)
+      return next
+    })
+    if (syncTarget) {
+      updateContainerIRTOInAirtable(syncTarget)
+        .catch(err => console.warn('IR/TO sync failed:', err.message))
+    }
+  }
+
   const handleDeleteContainer = (id) => {
+    const container = containers.find(c => c.id === id)
     setContainers(prev => {
       const next = prev.filter(c => c.id !== id)
       saveContainers(next)
       return next
     })
+    if (container) {
+      deleteContainerFromAirtable(container)
+        .catch(err => console.warn('Container Airtable delete failed:', err.message))
+    }
   }
 
-  const handleNetsuiteItemsUpdated = (data) => {
-    setNetsuiteItems(data)
-    setNetsuiteUpdatedAt(data.updatedAt)
+  const handleSyncContainersToAirtable = async () => {
+    setContainerSyncStatus('syncing')
+    setContainerSyncError(null)
+    try {
+      let updated = [...containers]
+      for (let i = 0; i < updated.length; i++) {
+        if (!updated[i].airtableId) {
+          const synced = await saveContainerToAirtable(updated[i])
+          updated[i] = synced
+        }
+      }
+      setContainers(updated)
+      saveContainers(updated)
+      setContainerSyncStatus('done')
+      setTimeout(() => setContainerSyncStatus('idle'), 3000)
+    } catch (err) {
+      console.error('Container sync failed:', err)
+      setContainerSyncError(err.message)
+      setContainerSyncStatus('error')
+      setTimeout(() => setContainerSyncStatus('idle'), 8000)
+    }
+  }
+
+  // Convert a staged container into displaced warehouse bins (one bin per box),
+  // remove the container from staging, and switch to the warehouse tab.
+  const handleReceiveContainer = (containerId) => {
+    const container = containers.find(c => c.id === containerId)
+    if (!container) return
+    const newBins = container.boxes.map(box => ({
+      id:               `staging_${box.id}`,
+      binId:            box.binId,
+      rackId:           null,
+      col:              0,
+      row:              0,
+      displaced:        true,
+      displacedFrom:    'receiving',
+      fromStaging:      true,
+      skus:             (box.skus ?? []).map(s => ({ id: `${box.id}_${s.sku}`, sku: s.sku, qty: s.qty, location: 'TBD' })),
+      poNumber:         box.poNumber          ?? null,
+      poDescription:    box.poDescription     ?? null,
+      itemReceiptNum:   container.itemReceiptNum   ?? null,
+      transferOrderNum: container.transferOrderNum ?? null,
+    }))
+    setBins(prev => [...prev, ...newBins])
+    setIsDirty(true)
+    setContainers(prev => {
+      const next = prev.filter(c => c.id !== containerId)
+      saveContainers(next)
+      return next
+    })
+    setActiveTab('warehouse')
+  }
+
+  const handleUpdateBin = (binId, updates) => {
+    setBins(prev => prev.map(b => b.id === binId ? { ...b, ...updates } : b))
+    setIsDirty(true)
+  }
+
+  const handleImportNetsuiteItems = (csvText) => {
+    try {
+      const { itemsBySku, styleColorIndex } = parseNetsuiteItemsCsv(csvText)
+      const ts = saveNetsuiteItems(itemsBySku, styleColorIndex)
+      setNetsuiteItems({ itemsBySku, styleColorIndex, updatedAt: ts })
+      setNetsuiteUpdatedAt(ts)
+    } catch (err) {
+      console.warn('NetSuite Items import failed:', err.message)
+    }
+  }
+
+  const handleImportPOCsv = async (csvText) => {
+    setPoImportStatus('importing')
+    setPoImportError(null)
+    setPoImportResult(null)
+    try {
+      // Save PO locations locally first (fast, synchronous) so export works offline
+      const { pos } = parsePOWarehouseViewCsv(csvText)
+      savePOLocationsLocally(pos)
+      setPoLocations(loadPOLocations())
+      savePOLineDataLocally(pos)
+      setPoLineData(loadPOLineData())
+
+      const result = await importPOsToAirtable(csvText, msg => console.info('[PO import]', msg))
+      setPoImportResult(result)
+      setPoImportStatus('done')
+      setTimeout(() => setPoImportStatus('idle'), 6000)
+    } catch (err) {
+      console.error('PO import failed:', err)
+      setPoImportError(err.message)
+      setPoImportStatus('error')
+      setTimeout(() => setPoImportStatus('idle'), 10000)
+    }
+  }
+
+  const handleExportInventoryTransfer = (container) => {
+    const { itemReceipt, inventoryTransfer } = generateNetSuiteExport(container, poLocations, poLineData)
+    // Block the download if any SKU would be received in excess of the PO ordered qty.
+    // The user must resolve the packing list discrepancy before importing to NetSuite.
+    if (itemReceipt.overReceives?.length > 0) {
+      setOverReceiveWarning({
+        items: itemReceipt.overReceives,
+        proceed: () => {
+          downloadCSV(itemReceipt.csv, itemReceipt.filename)
+          setTimeout(() => downloadCSV(inventoryTransfer.csv, inventoryTransfer.filename), 300)
+        },
+      })
+      return
+    }
+    // Item Receipt must be imported into NetSuite first — download it first
+    downloadCSV(itemReceipt.csv, itemReceipt.filename)
+    // Small delay so the browser doesn't block two simultaneous downloads
+    setTimeout(() => downloadCSV(inventoryTransfer.csv, inventoryTransfer.filename), 300)
   }
 
   // ── Save layout to Airtable ───────────────────────────────────────────────
@@ -575,6 +847,31 @@ function App() {
           </div>
         </div>
       )}
+      {overReceiveWarning && (
+        <div className="modal-overlay">
+          <div className="modal-card">
+            <h3>Over-Receive Blocked</h3>
+            <p>The following SKUs are packed in quantities that exceed the PO ordered amount. The export has been blocked until the packing list is corrected.</p>
+            <div className="overpack-list">
+              {overReceiveWarning.items.map(item => (
+                <div key={`${item.poNumber}-${item.sku}`} className="overpack-item">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', width: '100%' }}>
+                    <span className="sku-code">{item.sku}</span>
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 8 }}>{item.poNumber}</span>
+                  </div>
+                  <span className="overpack-detail" style={{ color: '#e74c3c' }}>
+                    {item.shipped} shipped · {item.poQty} on PO · <strong>+{item.excess} excess</strong>
+                  </span>
+                </div>
+              ))}
+            </div>
+            <p>Return to the packing list, reduce quantities to match the PO, and re-export.</p>
+            <div className="modal-actions">
+              <button className="btn-secondary" onClick={() => setOverReceiveWarning(null)}>Dismiss</button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* ── Tab bar ── */}
       <div className="tab-bar">
         <button
@@ -592,6 +889,12 @@ function App() {
             <span className="tab-badge">{containers.length}</span>
           )}
         </button>
+        <button
+          className={`tab-btn${activeTab === 'walk' ? ' active' : ''}`}
+          onClick={() => setActiveTab('walk')}
+        >
+          Walk
+        </button>
       </div>
 
       {/* ── Staging tab ── */}
@@ -599,11 +902,39 @@ function App() {
         <StagingPanel
           containers={containers}
           netsuiteItems={netsuiteItems}
-          netsuiteUpdatedAt={netsuiteUpdatedAt}
           onImportContainer={handleImportContainer}
+          onUpdateContainer={handleUpdateContainer}
           onUpdateBox={handleUpdateContainerBox}
           onDeleteContainer={handleDeleteContainer}
-          onNetsuiteItemsUpdated={handleNetsuiteItemsUpdated}
+          onReceiveContainer={handleReceiveContainer}
+          onSyncToAirtable={handleSyncContainersToAirtable}
+          syncStatus={containerSyncStatus}
+          syncError={containerSyncError}
+          onImportPOCsv={handleImportPOCsv}
+          poImportStatus={poImportStatus}
+          poImportError={poImportError}
+          poImportResult={poImportResult}
+          onExportInventoryTransfer={handleExportInventoryTransfer}
+          hasPOLocations={Object.keys(poLocations).length > 0}
+          poLocations={poLocations}
+        />
+      )}
+
+      {/* ── Walk tab ── */}
+      {activeTab === 'walk' && (
+        <WalkMode
+          warehouses={warehouses}
+          racks={racks}
+          bins={bins}
+          locationNames={locationNames}
+          locationQtys={locationQtys}
+          skuCatalog={skuCatalog}
+          onSelectBin={handleSelectBin}
+          onAddSku={handleAddSku}
+          onRemoveSku={handleRemoveSku}
+          onUpdateSkuQty={handleUpdateSkuQty}
+          onUpdateSkuLocation={handleUpdateSkuLocation}
+          onCreateRack={handleCreateRackManual}
         />
       )}
 
@@ -634,6 +965,7 @@ function App() {
             onMoveBin={handleMoveBin}
             onCancelMoveBin={handleCancelMoveBin}
             onRequestDeleteBin={handleRequestDeleteBin}
+            locationColors={locationColors}
           />
         </div>
         <ControlPanel
@@ -661,9 +993,14 @@ function App() {
           onAddSku={handleAddSku}
           onRemoveSku={handleRemoveSku}
           onUpdateSkuQty={handleUpdateSkuQty}
+          onUpdateSkuLocation={handleUpdateSkuLocation}
+          onUpdateBin={handleUpdateBin}
           onUpdateBinDimensions={handleUpdateBinDimensions}
           onMarkLabelPrinted={handleMarkLabelPrinted}
           onImportCsv={handleImportCsv}
+          onImportNetsuiteItems={handleImportNetsuiteItems}
+          netsuiteItemsCount={Object.keys(netsuiteItems?.itemsBySku ?? {}).length}
+          netsuiteItemsUpdatedAt={netsuiteUpdatedAt}
           skuCatalog={skuCatalog}
           catalogUpdatedAt={catalogUpdatedAt}
           confirmedShortages={confirmedShortages}
@@ -677,6 +1014,11 @@ function App() {
           onCancelPlaceRoom={handleCancelPlaceRoom}
           onDeleteRoom={handleDeleteRoom}
           onSelectRoom={handleSelectRoom}
+          poLineData={poLineData}
+          poLocations={poLocations}
+          locationColors={locationColors}
+          locationQtys={locationQtys}
+          locationNames={locationNames}
         />
       </div>
 

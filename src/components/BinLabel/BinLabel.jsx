@@ -29,7 +29,7 @@ function BinLabel({ bin, rack, skuCatalog, onClose, onPrinted }) {
   const bw         = bin.binW ?? rack?.binW ?? 2
   const bd         = bin.binD ?? rack?.binD ?? (4/3)
   const bh         = bin.binH ?? rack?.binH ?? (17/12)
-  const toIn       = v => (v * 12).toFixed(1)   // 1 unit ≈ 1 ft → inches
+  const toIn       = v => Math.ceil(v * 12)   // feet → whole inches, rounded up
 
   return (
     <div className="label-overlay" onClick={e => { if (e.target === e.currentTarget) onClose?.() }}>
@@ -64,7 +64,7 @@ function BinLabel({ bin, rack, skuCatalog, onClose, onPrinted }) {
                 </>
               )}
               <div className="label-dims">
-                {bw}" W × {bd.toFixed(2)}" D × {bh.toFixed(2)}" H
+                {toIn(bw)}" W × {toIn(bd)}" D × {toIn(bh)}" H
               </div>
             </div>
           </div>
