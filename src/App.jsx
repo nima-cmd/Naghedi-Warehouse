@@ -4,7 +4,7 @@ import Canvas from './components/Canvas/Canvas'
 import ControlPanel from './components/ControlPanel/ControlPanel'
 import StagingPanel from './components/Staging/StagingPanel'
 import WalkMode from './components/WalkMode/WalkMode'
-import { loadLayout, saveLayout } from './services/airtable'
+import { loadLayout, saveLayout, loadCatalogData, saveCatalogData } from './services/airtable'
 import { parseCatalogCsv, loadCatalog, saveCatalog, saveLocationQtys, loadLocationQtys } from './services/catalog'
 import { loadNetsuiteItems, parseNetsuiteItemsCsv, saveNetsuiteItems } from './services/netsuiteItems'
 import {
@@ -61,8 +61,9 @@ function App() {
   // 'idle' | 'loading' | 'saving' | 'saved' | 'error'
   const [saveStatus, setSaveStatus] = useState('idle')
   const [saveError, setSaveError] = useState(null)
-  const airtableRecordId = useRef(null)  // Airtable record ID after first load/save
-  const initialLoadDone  = useRef(false) // flip true after first load so dirty-tracking ignores the restore
+  const airtableRecordId  = useRef(null)  // Airtable record ID after first load/save
+  const catalogRecordId   = useRef(null)  // Airtable record ID for the catalog record
+  const initialLoadDone   = useRef(false) // flip true after first load so dirty-tracking ignores the restore
   const [isDirty, setIsDirty] = useState(false)
   // SKU catalog imported from NetSuite CSV — keyed by SKU string → { qty, name }
   const [skuCatalog, setSkuCatalog] = useState({})
@@ -130,9 +131,24 @@ function App() {
       .catch(err => console.warn('Containers Airtable load failed, using local cache:', err.message))
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Load layout from Airtable on mount ────────────────────────────────────
+  // ── Load layout + catalog from Airtable on mount ──────────────────────────
   useEffect(() => {
     setSaveStatus('loading')
+
+    // Load catalog from Airtable in background — restores locationNames/catalog on any device
+    loadCatalogData()
+      .then(result => {
+        if (!result) return
+        catalogRecordId.current = result.recordId
+        if (result.locationNames?.length) setLocationNames(result.locationNames)
+        if (result.locationBreakdown)     setLocationQtys(result.locationBreakdown)
+        if (result.skuCatalog) {
+          setSkuCatalog(result.skuCatalog)
+          saveLocationQtys(result.locationBreakdown ?? {}, result.locationNames ?? [])
+        }
+      })
+      .catch(err => console.warn('Catalog Airtable load failed:', err.message))
+
     loadLayout()
       .then(result => {
         if (result) {
@@ -570,6 +586,10 @@ function App() {
     setLocationQtys(locationBreakdown)
     setLocationNames(locNames)
     setIsDirty(true)
+    // Push catalog to Airtable so all devices (phone, tablet) see the same imported quantities
+    saveCatalogData(catalog, locationBreakdown, locNames, catalogRecordId.current)
+      .then(id => { catalogRecordId.current = id })
+      .catch(err => console.warn('Catalog Airtable sync failed:', err.message))
   }
 
   const handleUpdateBinDimensions = (binId, dims) => {

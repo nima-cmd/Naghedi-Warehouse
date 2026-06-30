@@ -58,6 +58,40 @@ export async function loadLayout() {
   }
 }
 
+// ── Load catalog ─────────────────────────────────────────────────────────────
+// Fetches the SKU catalog + location data saved by a previous CSV import.
+// Returns { recordId, skuCatalog, locationBreakdown, locationNames } or null.
+export async function loadCatalogData() {
+  const filter = encodeURIComponent('{Key}="catalog"')
+  const res = await fetch(`${API}?filterByFormula=${filter}&maxRecords=1`, {
+    headers: authHeaders(),
+  })
+  await checkResponse(res)
+  const data = await res.json()
+  if (!data.records.length) return null
+  const rec = data.records[0]
+  return { recordId: rec.id, ...JSON.parse(rec.fields.State) }
+}
+
+// ── Save catalog ──────────────────────────────────────────────────────────────
+// Persists the SKU catalog and location breakdown to Airtable so all devices
+// (desktop + phone) share the same imported quantities.
+export async function saveCatalogData(skuCatalog, locationBreakdown, locationNames, existingRecordId = null) {
+  const fields = {
+    Layout: 'SKU Catalog',
+    Key:    'catalog',
+    State:  JSON.stringify({ skuCatalog, locationBreakdown, locationNames }),
+  }
+  const method = existingRecordId ? 'PATCH' : 'POST'
+  const body   = existingRecordId
+    ? { records: [{ id: existingRecordId, fields }] }
+    : { records: [{ fields }] }
+  const res = await fetch(API, { method, headers: authHeaders(), body: JSON.stringify(body) })
+  await checkResponse(res)
+  const data = await res.json()
+  return data.records[0].id
+}
+
 // ── Save ──────────────────────────────────────────────────────────────────────
 // Saves the current layout to Airtable.
 // Pass existingRecordId (from a previous load or save) to PATCH the existing
