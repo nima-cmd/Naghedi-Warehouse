@@ -16,8 +16,11 @@ export default function WalkMode({
   onUpdateSkuLocation,
   onCreateRack,
 }) {
-  const [view, setView] = useState('finder')  // 'finder' | 'bin' | 'create-rack'
+  const [view, setView] = useState('finder')  // 'finder' | 'rack' | 'bin' | 'create-rack'
   const [activeBinId, setActiveBinId] = useState(null)
+  const [browsedRackId, setBrowsedRackId] = useState(null)
+  const [binBackView, setBinBackView] = useState('finder')  // where ← Back goes from bin detail
+
   const [searchInput, setSearchInput] = useState('')
   const [notFound, setNotFound] = useState(false)
   const [scanning, setScanning] = useState(null)  // 'bin' | 'sku'
@@ -34,9 +37,19 @@ export default function WalkMode({
   const [crRows, setCrRows] = useState(6)
   const [crCreated, setCrCreated] = useState(null)
 
-  const activeBin = bins.find(b => b.id === activeBinId)
+  const activeBin   = bins.find(b => b.id === activeBinId)
+  const browsedRack = racks.find(r => r.id === browsedRackId)
 
-  // Bins in the same rack as activeBin, sorted column-first then level
+  // Bins for the rack currently being browsed — sorted for display:
+  // rows top-to-bottom (highest level first), columns left-to-right
+  const browsedRackBins = useMemo(() => {
+    if (!browsedRackId) return []
+    return bins
+      .filter(b => b.rackId === browsedRackId)
+      .sort((a, b) => b.row - a.row || a.col - b.col)
+  }, [bins, browsedRackId])
+
+  // Bins in the same rack as activeBin — sorted column-first for prev/next navigation
   const rackBins = useMemo(() => {
     if (!activeBin?.rackId) return []
     return bins
@@ -48,8 +61,9 @@ export default function WalkMode({
   const prevBin = activeBinIndex > 0 ? rackBins[activeBinIndex - 1] : null
   const nextBin = activeBinIndex < rackBins.length - 1 ? rackBins[activeBinIndex + 1] : null
 
-  const openBin = (bin) => {
+  const openBin = (bin, backView = 'finder') => {
     setActiveBinId(bin.id)
+    setBinBackView(backView)
     onSelectBin?.(bin.id)
     setRecentBinIds(prev => [bin.id, ...prev.filter(id => id !== bin.id)].slice(0, 8))
     setView('bin')
@@ -59,9 +73,15 @@ export default function WalkMode({
     setNotFound(false)
   }
 
+  const openRack = (rack) => {
+    setBrowsedRackId(rack.id)
+    setView('rack')
+  }
+
   const handleSearch = (value) => {
     const q = (value ?? '').trim().toUpperCase()
     if (!q) return
+    // Match against full bin ID or just the short suffix (e.g. "A3" within browsed rack)
     const found = bins.find(b => b.binId?.toUpperCase() === q)
     if (found) {
       openBin(found)
@@ -100,8 +120,9 @@ export default function WalkMode({
   }
 
   const totalUnits = (bin) => (bin.skus ?? []).reduce((s, e) => s + e.qty, 0)
+  const shortBinId = (bin) => bin.binId?.split('-').pop() ?? bin.binId  // "A1" from "WH1-R01-A1"
 
-  const crBinCount = (parseInt(crCols) || 0) * (parseInt(crRows) || 0)
+  const crBinCount  = (parseInt(crCols) || 0) * (parseInt(crRows) || 0)
   const crLastBinId = crBinCount > 0
     ? `${crRackId || 'RACK'}-${String.fromCharCode(64 + (parseInt(crCols) || 1))}${parseInt(crRows) || 1}`
     : '—'
@@ -115,7 +136,7 @@ export default function WalkMode({
         />
       )}
 
-      {/* ── Bin Finder ── */}
+      {/* ══════════════ BIN FINDER ══════════════ */}
       {view === 'finder' && (
         <div className="walk-finder">
           <div className="walk-section-title">Find a bin to fill</div>
@@ -147,6 +168,52 @@ export default function WalkMode({
             </div>
           )}
 
+          {/* ── Rack Browser ── */}
+          <div className="walk-rack-browser">
+            <div className="walk-row-header">
+              <span className="walk-label">Browse Racks</span>
+              <button
+                className="walk-link-btn"
+                onClick={() => { setView('create-rack'); setCrCreated(null) }}
+              >
+                + New Rack
+              </button>
+            </div>
+
+            {racks.length === 0 && (
+              <div className="walk-empty-msg">No racks yet — tap + New Rack to create one</div>
+            )}
+
+            {warehouses.map((wh, whIdx) => {
+              const whRacks = racks
+                .filter(r => r.whIndex === whIdx)
+                .sort((a, b) => a.rackId.localeCompare(b.rackId))
+              if (whRacks.length === 0) return null
+              return (
+                <div key={wh.code} className="walk-wh-group">
+                  <div className="walk-wh-label">{wh.code} — {wh.name}</div>
+                  {whRacks.map(rack => {
+                    const rBins    = bins.filter(b => b.rackId === rack.id)
+                    const filled   = rBins.filter(b => (b.skus ?? []).length > 0).length
+                    return (
+                      <button
+                        key={rack.id}
+                        className="walk-rack-item"
+                        onClick={() => openRack(rack)}
+                      >
+                        <span className="walk-rack-id">{rack.rackId}</span>
+                        <span className="walk-rack-meta">
+                          {rack.cols}×{rack.rows} · {filled}/{rBins.length} filled
+                        </span>
+                        <span className="walk-rack-chevron">›</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )
+            })}
+          </div>
+
           {recentBinIds.length > 0 && (
             <div className="walk-recent">
               <div className="walk-label">Recent</div>
@@ -164,21 +231,69 @@ export default function WalkMode({
               })}
             </div>
           )}
-
-          <div className="walk-divider" />
-
-          <button className="walk-create-rack-btn" onClick={() => { setView('create-rack'); setCrCreated(null) }}>
-            + Create New Rack
-          </button>
         </div>
       )}
 
-      {/* ── Bin Detail ── */}
+      {/* ══════════════ RACK VIEW ══════════════ */}
+      {view === 'rack' && browsedRack && (
+        <div className="walk-rack-view">
+          <div className="walk-bin-nav">
+            <button className="walk-back-btn" onClick={() => setView('finder')}>← Racks</button>
+            <span className="walk-bin-id" style={{ color: 'var(--text)' }}>{browsedRack.rackId}</span>
+            <span className="walk-bin-rack-label">
+              {warehouses[browsedRack.whIndex]?.code}
+            </span>
+          </div>
+
+          <div className="walk-rack-summary">
+            <span>{browsedRack.cols} columns · {browsedRack.rows} levels</span>
+            <span>
+              {browsedRackBins.filter(b => (b.skus ?? []).length > 0).length} / {browsedRackBins.length} filled
+            </span>
+          </div>
+
+          {/* Column header row */}
+          <div
+            className="walk-bin-grid walk-bin-grid-header"
+            style={{ gridTemplateColumns: `repeat(${browsedRack.cols}, 1fr)` }}
+          >
+            {Array.from({ length: browsedRack.cols }, (_, i) => (
+              <div key={i} className="walk-grid-col-header">
+                {String.fromCharCode(65 + i)}
+              </div>
+            ))}
+          </div>
+
+          {/* Bin grid — highest level at top */}
+          <div
+            className="walk-bin-grid"
+            style={{ gridTemplateColumns: `repeat(${browsedRack.cols}, 1fr)` }}
+          >
+            {browsedRackBins.map(bin => {
+              const units   = totalUnits(bin)
+              const filled  = (bin.skus ?? []).length > 0
+              return (
+                <button
+                  key={bin.id}
+                  className={`walk-bin-cell ${filled ? 'filled' : 'empty'}`}
+                  onClick={() => openBin(bin, 'rack')}
+                >
+                  <span className="walk-bin-cell-label">{shortBinId(bin)}</span>
+                  {filled && <span className="walk-bin-cell-count">{units}</span>}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════ BIN DETAIL ══════════════ */}
       {view === 'bin' && activeBin && (
         <div className="walk-bin-detail">
-          {/* Nav bar */}
           <div className="walk-bin-nav">
-            <button className="walk-back-btn" onClick={() => setView('finder')}>← Back</button>
+            <button className="walk-back-btn" onClick={() => setView(binBackView)}>
+              {binBackView === 'rack' ? `← ${browsedRack?.rackId ?? 'Rack'}` : '← Back'}
+            </button>
             <span className="walk-bin-id">{activeBin.binId}</span>
             <span className="walk-bin-rack-label">
               {racks.find(r => r.id === activeBin.rackId)?.rackId ?? (activeBin.displaced ? 'Unplaced' : '—')}
@@ -208,7 +323,9 @@ export default function WalkMode({
                         <span className="walk-sku-loc">{entry.location}</span>
                       )}
                       {catQty != null && (
-                        <span className="walk-sku-of">of {catQty} in stock{locQty != null ? ` · ${locQty} here` : ''}</span>
+                        <span className="walk-sku-of">
+                          of {catQty} in stock{locQty != null ? ` · ${locQty} here` : ''}
+                        </span>
                       )}
                     </div>
                   </div>
@@ -274,7 +391,6 @@ export default function WalkMode({
             </div>
 
             {skuError && <div className="walk-error">{skuError}</div>}
-
             <button className="walk-btn-primary" onClick={handleAddSku}>Add to Bin</button>
           </div>
 
@@ -284,24 +400,24 @@ export default function WalkMode({
               <button
                 className="walk-nav-btn walk-nav-prev"
                 disabled={!prevBin}
-                onClick={() => prevBin && openBin(prevBin)}
+                onClick={() => prevBin && openBin(prevBin, binBackView)}
               >
-                ← {prevBin ? prevBin.binId : ''}
+                ← {prevBin ? shortBinId(prevBin) : ''}
               </button>
               <span className="walk-nav-pos">{activeBinIndex + 1} / {rackBins.length}</span>
               <button
                 className="walk-nav-btn walk-nav-next"
                 disabled={!nextBin}
-                onClick={() => nextBin && openBin(nextBin)}
+                onClick={() => nextBin && openBin(nextBin, binBackView)}
               >
-                {nextBin ? nextBin.binId : ''} →
+                {nextBin ? shortBinId(nextBin) : ''} →
               </button>
             </div>
           )}
         </div>
       )}
 
-      {/* ── Create Rack ── */}
+      {/* ══════════════ CREATE RACK ══════════════ */}
       {view === 'create-rack' && (
         <div className="walk-create-rack">
           <div className="walk-bin-nav">
@@ -310,9 +426,14 @@ export default function WalkMode({
             <span />
           </div>
 
+          <div className="walk-form-note">
+            You choose the Rack ID — bins will be named {'{'}YourRackID{'}'}-A1, -B2, etc.
+            This format is NetSuite-compatible.
+          </div>
+
           {crCreated && (
             <div className="walk-success">
-              Rack <strong>{crCreated}</strong> created — search for its bins to start filling them.
+              Rack <strong>{crCreated}</strong> created — tap it in the rack list to fill its bins.
             </div>
           )}
 
@@ -331,7 +452,7 @@ export default function WalkMode({
             </div>
 
             <div className="walk-form-field">
-              <label>Rack ID</label>
+              <label>Rack ID — you decide the name</label>
               <input
                 className="walk-input"
                 placeholder="e.g. WH1-R01"

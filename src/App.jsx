@@ -875,7 +875,7 @@ function App() {
       {/* ── Tab bar ── */}
       <div className="tab-bar">
         <button
-          className={`tab-btn${activeTab === 'warehouse' ? ' active' : ''}`}
+          className={`tab-btn tab-btn-3d${activeTab === 'warehouse' ? ' active' : ''}`}
           onClick={() => setActiveTab('warehouse')}
         >
           Warehouse 3D

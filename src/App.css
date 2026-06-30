@@ -1902,6 +1902,9 @@ kbd {
   /* Hide the 3D canvas layout on phones — use Walk tab instead */
   #main-layout { display: none !important; }
 
+  /* Hide the Warehouse 3D tab button — canvas doesn't work on mobile */
+  .tab-btn-3d { display: none; }
+
   /* Larger touch targets for tab buttons */
   .tab-btn { min-height: 44px; font-size: 13px; padding: 0 16px; }
   .tab-bar  { height: 44px; }
