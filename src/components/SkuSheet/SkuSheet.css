@@ -1,0 +1,190 @@
+/* ── Overlay (screen only) ──────────────────────────────────────────────── */
+.sheet-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 300;
+  padding: 24px;
+}
+
+.sheet-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  height: 100%;
+  max-width: 900px;
+}
+
+.sheet-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.sheet-controls-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.sheet-controls-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.sheet-search {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  padding: 7px 10px;
+  outline: none;
+  min-width: 200px;
+}
+
+.sheet-search:focus { border-color: var(--accent); }
+
+/* ── The printable sheet itself ─────────────────────────────────────────── */
+.sku-sheet {
+  background: #ffffff;
+  color: #000000;
+  font-family: 'Arial', 'Helvetica', sans-serif;
+  padding: 24px 28px;
+  border-radius: 4px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.sheet-header {
+  margin-bottom: 18px;
+  padding-bottom: 12px;
+  border-bottom: 2px solid #000;
+}
+
+.sheet-title {
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.sheet-subtitle {
+  font-size: 11px;
+  color: #666;
+  margin-top: 2px;
+}
+
+.sheet-index {
+  font-size: 10px;
+  color: #999;
+  margin-top: 8px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.sheet-empty {
+  font-size: 13px;
+  color: #888;
+  font-style: italic;
+  padding: 20px 0;
+}
+
+.sku-group {
+  break-inside: avoid;
+  margin-bottom: 16px;
+}
+
+.sku-group-header {
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  background: #eee;
+  padding: 4px 8px;
+  margin-bottom: 6px;
+}
+
+.sku-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.sku-card {
+  break-inside: avoid;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+
+.sku-card-qr {
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+}
+
+.sku-card-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.sku-card-code {
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sku-card-name {
+  font-size: 10px;
+  color: #555;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sku-card-qty {
+  font-size: 9px;
+  color: #999;
+}
+
+/* ── Print styles ───────────────────────────────────────────────────────── */
+@media print {
+  body * { visibility: hidden !important; }
+
+  .sku-sheet,
+  .sku-sheet * { visibility: visible !important; }
+
+  .no-print,
+  .no-print * { visibility: hidden !important; display: none !important; }
+
+  .sku-sheet {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    padding: 0 !important;
+    border-radius: 0 !important;
+    overflow: visible !important;
+  }
+
+  .sku-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  @page {
+    size: letter;
+    margin: 0.5in;
+  }
+}

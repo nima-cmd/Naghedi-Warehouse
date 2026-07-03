@@ -49,13 +49,39 @@ function App() {
   const [racks, setRacks] = useState([])
   const [bins, setBins] = useState([])
   const [placingRack, setPlacingRack] = useState(null)
+  const [placingGroup, setPlacingGroup] = useState(null)  // click-to-place move for 2+ racks at once
   const [selectedRackId, setSelectedRackId] = useState(null)
+  const [selectedRackIds, setSelectedRackIds] = useState([])  // cmd/ctrl+click group — moved/labeled together
   const [selectedBinId, setSelectedBinId] = useState(null)
   const [rackCounters, setRackCounters] = useState({ 0: 0, 1: 0 })
   const [skus] = useState([])
   const [panelVisible, setPanelVisible] = useState(true)
   const [movingBinId, setMovingBinId] = useState(null)
   const [deletingBinId, setDeletingBinId] = useState(null)
+
+  // Undo history for rack/bin structural changes (create, move, delete, resize) —
+  // coarse-grained snapshots of {racks, bins} rather than per-field diffs, so
+  // restoring is a single, easy-to-reason-about setRacks/setBins pair.
+  const [undoStack, setUndoStack] = useState([])
+  const UNDO_LIMIT = 20
+
+  // Call at the top of a handler, before mutating racks/bins, to record what
+  // they looked like beforehand. Reads racks/bins from this render's closure,
+  // i.e. the values as of right now — correct as long as it's called
+  // synchronously before the handler's own setRacks/setBins calls.
+  const pushUndoSnapshot = () => {
+    setUndoStack(prev => [...prev.slice(-(UNDO_LIMIT - 1)), { racks, bins }])
+  }
+
+  const handleUndo = () => {
+    setUndoStack(prev => {
+      if (prev.length === 0) return prev
+      const last = prev[prev.length - 1]
+      setRacks(last.racks)
+      setBins(last.bins)
+      return prev.slice(0, -1)
+    })
+  }
 
   // Airtable sync state
   // 'idle' | 'loading' | 'saving' | 'saved' | 'error'
@@ -260,13 +286,28 @@ function App() {
     setPlacingRack(config)
   }
 
-  const handleCancelPlace = () => setPlacingRack(null)
+  const handleCancelPlace = () => {
+    setPlacingRack(null)
+    // A group-in-progress isn't just cancelled — its racks were already pulled out
+    // of `racks`, so cancelling must put them back at their original spot or they're lost.
+    if (placingGroup) {
+      const restored = placingGroup.items.map(item => ({
+        id: item.id, rackId: item.rackId, whIndex: placingGroup.whIndex,
+        localX: item.origLocalX, localZ: item.origLocalZ,
+        cols: item.cols, rows: item.rows, rotated: item.rotated,
+        binW: item.binW, binD: item.binD, binH: item.binH,
+      }))
+      setRacks(prev => [...prev, ...restored])
+      setPlacingGroup(null)
+    }
+  }
 
   const handleToggleRotation = () => {
     setPlacingRack(prev => prev ? { ...prev, rotated: !prev.rotated } : null)
   }
 
   const handlePlaceRack = (whIndex, localX, localZ) => {
+    pushUndoSnapshot()
     if (placingRack.id) {
       // Re-placing an existing rack after Move — preserve name, regenerate bins at same positions
       const rack = { id: placingRack.id, rackId: placingRack.rackId, whIndex, localX, localZ, cols: placingRack.cols, rows: placingRack.rows, rotated: placingRack.rotated || false }
@@ -294,10 +335,56 @@ function App() {
     setPlacingRack(null)
   }
 
+  // Drop the whole group at once — (localX, localZ) is the group's bounding-box
+  // min corner, so every rack lands at click point + its stored relative offset,
+  // preserving exact spacing between them. Bins aren't touched — same rack ids.
+  const handlePlaceRackGroup = (whIndex, localX, localZ) => {
+    if (!placingGroup) return
+    pushUndoSnapshot()
+    const newRacks = placingGroup.items.map(item => ({
+      id: item.id, rackId: item.rackId, whIndex,
+      localX: localX + item.relX, localZ: localZ + item.relZ,
+      cols: item.cols, rows: item.rows, rotated: item.rotated,
+      binW: item.binW, binD: item.binD, binH: item.binH,
+    }))
+    setRacks(prev => [...prev, ...newRacks])
+    setPlacingGroup(null)
+  }
+
   // Selecting a bin clears rack selection, and vice versa
   const handleSelectRack = (id) => {
     setSelectedRackId(id)
     if (id) setSelectedBinId(null)
+  }
+
+  // cmd/ctrl+click on a rack label toggles it in/out of the group selection —
+  // independent of selectedRackId, so it doesn't drill into that rack's detail view.
+  const handleToggleRackGroup = (id) => {
+    setSelectedRackIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+  }
+  const handleClearRackGroup = () => setSelectedRackIds([])
+
+  // Nudge every rack in the current group by the same delta — for lining up a
+  // row's spacing precisely (e.g. a known 3 ft aisle) instead of eyeballing a drag.
+  const handleShiftRackGroup = (dx, dz) => {
+    if (selectedRackIds.length === 0) return
+    pushUndoSnapshot()
+    setRacks(prev => prev.map(r =>
+      selectedRackIds.includes(r.id) ? { ...r, localX: r.localX + dx, localZ: r.localZ + dz } : r
+    ))
+  }
+
+  // Stamp a shared label (e.g. "Row A") onto every rack in the group so the whole
+  // row can be re-selected later without re-clicking each rack individually.
+  const handleApplyRowLabel = (label) => {
+    if (selectedRackIds.length === 0) return
+    pushUndoSnapshot()
+    setRacks(prev => prev.map(r => selectedRackIds.includes(r.id) ? { ...r, row: label } : r))
+  }
+
+  const handleSelectRowGroup = (rowLabel) => {
+    if (!rowLabel) return
+    setSelectedRackIds(racks.filter(r => r.row === rowLabel).map(r => r.id))
   }
 
   const handleSelectBin = (id) => {
@@ -308,6 +395,7 @@ function App() {
   const handleUpdateRack = (id, changes) => {
     const rack = racks.find(r => r.id === id)
     if (!rack) return
+    pushUndoSnapshot()
     const updated = { ...rack, ...changes }
     setRacks(prev => prev.map(r => r.id === id ? updated : r))
     // If the slot grid changed, preserve existing bins, displace overflow, restore those that fit again
@@ -371,6 +459,7 @@ function App() {
   }
 
   const handleDeleteRack = (id) => {
+    pushUndoSnapshot()
     setRacks(prev => prev.filter(r => r.id !== id))
     // Bins with SKU data are displaced to the limbo zone so their contents aren't lost.
     // Completely empty bins are discarded — there's nothing to save.
@@ -389,6 +478,7 @@ function App() {
   // Create a rack from a text form (Walk Mode) — no 3D canvas click needed.
   // The rack is placed at (0,0) and can be repositioned in the 3D view on desktop later.
   const handleCreateRackManual = (whIndex, rackId, cols, rows) => {
+    pushUndoSnapshot()
     const newCount = (rackCounters[whIndex] ?? 0) + 1
     const newRack = {
       id: `rack_${Date.now()}`,
@@ -415,7 +505,42 @@ function App() {
     setPlacingRack({ id: rack.id, rackId: rack.rackId, cols: rack.cols, rows: rack.rows, rotated: rack.rotated || false })
   }
 
+  // Pick up every rack in the current group at once, preserving their exact
+  // relative spacing — click-to-place lands the whole group in one shot instead
+  // of nudging by hand-typed deltas. Matches the default bin footprint used
+  // in Canvas.jsx (BIN.w=2, BIN.d=4/3) since layout math lives there, not here.
+  const handleMoveRackGroup = () => {
+    if (selectedRackIds.length < 2) return
+    const groupRacks = racks.filter(r => selectedRackIds.includes(r.id))
+    if (groupRacks.length < 2) return
+
+    const DEFAULT_BW = 2, DEFAULT_BD = 4 / 3
+    const withExtents = groupRacks.map(r => {
+      const bw = r.binW ?? DEFAULT_BW, bd = r.binD ?? DEFAULT_BD
+      const extentX = r.rotated ? r.cols * bw : bd
+      const extentZ = r.rotated ? bd : r.cols * bw
+      return { ...r, extentX, extentZ }
+    })
+    const minX = Math.min(...withExtents.map(r => r.localX))
+    const minZ = Math.min(...withExtents.map(r => r.localZ))
+
+    const items = withExtents.map(r => ({
+      id: r.id, rackId: r.rackId, cols: r.cols, rows: r.rows, rotated: r.rotated,
+      binW: r.binW, binD: r.binD, binH: r.binH,
+      relX: r.localX - minX, relZ: r.localZ - minZ,
+      extentX: r.extentX, extentZ: r.extentZ,
+      origLocalX: r.localX, origLocalZ: r.localZ,
+    }))
+
+    setRacks(prev => prev.filter(r => !selectedRackIds.includes(r.id)))
+    setSelectedRackIds([])
+    setSelectedRackId(null)
+    setSelectedBinId(null)
+    setPlacingGroup({ whIndex: groupRacks[0].whIndex, items })
+  }
+
   const handleRemoveBin = (id) => {
+    pushUndoSnapshot()
     setBins(prev => prev.filter(b => b.id !== id))
     setSelectedBinId(null)
   }
@@ -427,6 +552,7 @@ function App() {
   const handleMoveBin = (binId, targetRackId, targetCol, targetRow) => {
     const targetRack = racks.find(r => r.id === targetRackId)
     if (!targetRack) return
+    pushUndoSnapshot()
     const sourceBin = bins.find(b => b.id === binId)
     if (!sourceBin) return
 
@@ -726,6 +852,10 @@ function App() {
       poDescription:    box.poDescription     ?? null,
       itemReceiptNum:   container.itemReceiptNum   ?? null,
       transferOrderNum: container.transferOrderNum ?? null,
+      // Carry packing-slip issues forward as a review flag so problems caught at
+      // import time (missing dims, unrecognized SKU, split PO) aren't lost once boxed.
+      flagged:          (box.issues ?? []).length > 0,
+      flagNote:         (box.issues ?? []).join(', '),
     }))
     setBins(prev => [...prev, ...newBins])
     setIsDirty(true)
@@ -817,6 +947,32 @@ function App() {
     }
   }
 
+  // ── Autosave safety net ───────────────────────────────────────────────────
+  // Bin/rack edits only live in memory until Save is tapped — there's no
+  // localStorage backup for this data. During a long solo Walk Mode session
+  // on a phone, losing the tab (backgrounding, low memory, accidental close)
+  // would silently lose everything since the last manual Save. Debounce a
+  // save a few seconds after each edit, and force one immediately if the
+  // tab is about to be hidden or closed.
+  useEffect(() => {
+    // A rack (or group) mid-move has been pulled out of `racks` and is only
+    // sitting in placingRack/placingGroup/placingRoom local state — saving now
+    // would persist a layout with that rack silently missing. Wait until the
+    // placement is completed (or cancelled) before autosaving.
+    if (!isDirty || saveStatus === 'saving' || placingRack || placingGroup || placingRoom) return
+    const timer = setTimeout(() => handleSave(), 8000)
+    const flushIfHidden = () => {
+      if (document.visibilityState === 'hidden' && !placingRack && !placingGroup && !placingRoom) handleSave()
+    }
+    document.addEventListener('visibilitychange', flushIfHidden)
+    window.addEventListener('pagehide', flushIfHidden)
+    return () => {
+      clearTimeout(timer)
+      document.removeEventListener('visibilitychange', flushIfHidden)
+      window.removeEventListener('pagehide', flushIfHidden)
+    }
+  }, [isDirty, saveStatus, bins, racks, warehouses, rooms, placingRack, placingGroup, placingRoom])
+
   const deletingBin = bins.find(b => b.id === deletingBinId)
 
   return (
@@ -828,6 +984,9 @@ function App() {
         saveError={saveError}
         isDirty={isDirty}
         onSave={handleSave}
+        onUndo={handleUndo}
+        canUndo={undoStack.length > 0}
+        undoCount={undoStack.length}
       />
       {deletingBin && (
         <div className="modal-overlay">
@@ -955,6 +1114,8 @@ function App() {
           onUpdateSkuQty={handleUpdateSkuQty}
           onUpdateSkuLocation={handleUpdateSkuLocation}
           onCreateRack={handleCreateRackManual}
+          onUpdateBin={handleUpdateBin}
+          onRequestDeleteBin={handleRequestDeleteBin}
         />
       )}
 
@@ -972,19 +1133,25 @@ function App() {
             onPlaceRoom={handlePlaceRoom}
             onSelectRoom={handleSelectRoom}
             placingRack={placingRack}
+            placingGroup={placingGroup}
             selectedRackId={selectedRackId}
+            selectedRackIds={selectedRackIds}
             selectedBinId={selectedBinId}
             onPlaceRack={handlePlaceRack}
+            onPlaceRackGroup={handlePlaceRackGroup}
             onCancelPlace={handleCancelPlace}
             onToggleRotation={handleToggleRotation}
             onSelectRack={handleSelectRack}
+            onToggleRackGroup={handleToggleRackGroup}
             onSelectBin={handleSelectBin}
             onMoveRack={handleMoveRack}
+            onMoveRackGroup={handleMoveRackGroup}
             onUpdateRack={handleUpdateRack}
             movingBinId={movingBinId}
             onMoveBin={handleMoveBin}
             onCancelMoveBin={handleCancelMoveBin}
             onRequestDeleteBin={handleRequestDeleteBin}
+            onUndo={handleUndo}
             locationColors={locationColors}
           />
         </div>
@@ -995,8 +1162,10 @@ function App() {
           bins={bins}
           skus={skus}
           selectedRackId={selectedRackId}
+          selectedRackIds={selectedRackIds}
           selectedBinId={selectedBinId}
           placingRack={placingRack}
+          placingGroup={placingGroup}
           onUpdateWarehouseName={handleUpdateWarehouseName}
           onStartPlaceRack={handleStartPlaceRack}
           onCancelPlace={handleCancelPlace}
@@ -1004,6 +1173,11 @@ function App() {
           onDeleteRack={handleDeleteRack}
           onMoveRack={handleMoveRack}
           onSelectRack={handleSelectRack}
+          onClearRackGroup={handleClearRackGroup}
+          onShiftRackGroup={handleShiftRackGroup}
+          onMoveRackGroup={handleMoveRackGroup}
+          onApplyRowLabel={handleApplyRowLabel}
+          onSelectRowGroup={handleSelectRowGroup}
           onSelectBin={handleSelectBin}
           movingBinId={movingBinId}
           onStartMoveBin={handleStartMoveBin}

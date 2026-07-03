@@ -1,4 +1,4 @@
-function TopBar({ panelVisible, onTogglePanel, saveStatus, saveError, isDirty, onSave }) {
+function TopBar({ panelVisible, onTogglePanel, saveStatus, saveError, isDirty, onSave, onUndo, canUndo, undoCount = 0 }) {
   const isBusy = saveStatus === 'loading' || saveStatus === 'saving'
 
   const saveLabel =
@@ -24,6 +24,14 @@ function TopBar({ panelVisible, onTogglePanel, saveStatus, saveError, isDirty, o
             {saveError.length > 60 ? saveError.slice(0, 57) + '…' : saveError}
           </span>
         )}
+        <button
+          className="topbar-undo"
+          onClick={onUndo}
+          disabled={!canUndo}
+          title={canUndo ? `Undo last rack/bin change (${undoCount} available)` : 'Nothing to undo'}
+        >
+          ↶ Undo
+        </button>
         <button
           className={saveClass}
           onClick={onSave}

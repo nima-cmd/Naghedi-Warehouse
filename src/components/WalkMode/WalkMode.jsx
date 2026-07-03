@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import BarcodeScanner from '../BarcodeScanner/BarcodeScanner'
 import './WalkMode.css'
 
@@ -15,6 +15,8 @@ export default function WalkMode({
   onUpdateSkuQty,
   onUpdateSkuLocation,
   onCreateRack,
+  onUpdateBin,
+  onRequestDeleteBin,
 }) {
   const [view, setView] = useState('finder')  // 'finder' | 'rack' | 'bin' | 'create-rack'
   const [activeBinId, setActiveBinId] = useState(null)
@@ -29,6 +31,7 @@ export default function WalkMode({
   const [locationInput, setLocationInput] = useState(() => locationNames[0] ?? 'TBD')
   const [skuError, setSkuError] = useState('')
   const [recentBinIds, setRecentBinIds] = useState([])
+  const [flagNoteInput, setFlagNoteInput] = useState('')
 
   // Create rack form
   const [crWhIndex, setCrWhIndex] = useState(0)
@@ -39,6 +42,12 @@ export default function WalkMode({
 
   const activeBin   = bins.find(b => b.id === activeBinId)
   const browsedRack = racks.find(r => r.id === browsedRackId)
+
+  // If the open bin was deleted out from under us (confirmed via the app-level
+  // delete modal), back out instead of rendering a blank bin-detail screen.
+  useEffect(() => {
+    if (view === 'bin' && activeBinId && !activeBin) setView(binBackView)
+  }, [view, activeBinId, activeBin, binBackView])
 
   // Bins for the rack currently being browsed — sorted for display:
   // rows top-to-bottom (highest level first), columns left-to-right
@@ -61,6 +70,10 @@ export default function WalkMode({
   const prevBin = activeBinIndex > 0 ? rackBins[activeBinIndex - 1] : null
   const nextBin = activeBinIndex < rackBins.length - 1 ? rackBins[activeBinIndex + 1] : null
 
+  // All bins flagged for recount, across every warehouse/rack — surfaced in the finder
+  // so a full-day flagging pass can be reviewed from any device without hunting rack by rack.
+  const flaggedBins = useMemo(() => bins.filter(b => b.flagged), [bins])
+
   const openBin = (bin, backView = 'finder') => {
     setActiveBinId(bin.id)
     setBinBackView(backView)
@@ -71,6 +84,19 @@ export default function WalkMode({
     setQtyInput(1)
     setSkuError('')
     setNotFound(false)
+    setFlagNoteInput(bin.flagNote ?? '')
+  }
+
+  const handleToggleFlag = () => {
+    if (!activeBin) return
+    onUpdateBin(activeBinId, activeBin.flagged
+      ? { flagged: false, flagNote: '' }
+      : { flagged: true, flagNote: flagNoteInput })
+  }
+
+  const handleFlagNoteBlur = () => {
+    if (!activeBin?.flagged) return
+    if (flagNoteInput !== activeBin.flagNote) onUpdateBin(activeBinId, { flagNote: flagNoteInput })
   }
 
   const openRack = (rack) => {
@@ -168,6 +194,22 @@ export default function WalkMode({
             </div>
           )}
 
+          {/* ── Needs Review ── */}
+          {flaggedBins.length > 0 && (
+            <div className="walk-flagged-list">
+              <div className="walk-row-header">
+                <span className="walk-label">🚩 Needs Review</span>
+                <span className="walk-count-badge">{flaggedBins.length}</span>
+              </div>
+              {flaggedBins.map(bin => (
+                <button key={bin.id} className="walk-flagged-item" onClick={() => openBin(bin)}>
+                  <span className="walk-bin-badge">{bin.binId}</span>
+                  {bin.flagNote && <span className="walk-flagged-note">{bin.flagNote}</span>}
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* ── Rack Browser ── */}
           <div className="walk-rack-browser">
             <div className="walk-row-header">
@@ -222,7 +264,7 @@ export default function WalkMode({
                 if (!bin) return null
                 return (
                   <button key={id} className="walk-recent-item" onClick={() => openBin(bin)}>
-                    <span className="walk-bin-badge">{bin.binId}</span>
+                    <span className="walk-bin-badge">{bin.flagged && '🚩 '}{bin.binId}</span>
                     <span className="walk-recent-meta">
                       {totalUnits(bin) === 0 ? 'empty' : `${totalUnits(bin)} units`}
                     </span>
@@ -275,9 +317,10 @@ export default function WalkMode({
               return (
                 <button
                   key={bin.id}
-                  className={`walk-bin-cell ${filled ? 'filled' : 'empty'}`}
+                  className={`walk-bin-cell ${filled ? 'filled' : 'empty'} ${bin.flagged ? 'flagged' : ''}`}
                   onClick={() => openBin(bin, 'rack')}
                 >
+                  {bin.flagged && <span className="walk-bin-cell-flag">🚩</span>}
                   <span className="walk-bin-cell-label">{shortBinId(bin)}</span>
                   {filled && <span className="walk-bin-cell-count">{units}</span>}
                 </button>
@@ -298,6 +341,33 @@ export default function WalkMode({
             <span className="walk-bin-rack-label">
               {racks.find(r => r.id === activeBin.rackId)?.rackId ?? (activeBin.displaced ? 'Unplaced' : '—')}
             </span>
+            <button
+              className="walk-delete-bin-btn"
+              title="Delete this bin"
+              onClick={() => onRequestDeleteBin(activeBinId)}
+            >
+              🗑
+            </button>
+          </div>
+
+          {/* Flag for review */}
+          <div className="walk-flag-section">
+            <button
+              className={`walk-flag-btn ${activeBin.flagged ? 'flagged' : ''}`}
+              onClick={handleToggleFlag}
+            >
+              {activeBin.flagged ? '🚩 Flagged for review — tap to clear' : '🚩 Flag for review'}
+            </button>
+            {activeBin.flagged && (
+              <textarea
+                className="walk-flag-note"
+                placeholder="Why? e.g. qty crossed out, label smudged, mixed carton…"
+                value={flagNoteInput}
+                onChange={e => setFlagNoteInput(e.target.value)}
+                onBlur={handleFlagNoteBlur}
+                rows={2}
+              />
+            )}
           </div>
 
           {/* SKU list */}

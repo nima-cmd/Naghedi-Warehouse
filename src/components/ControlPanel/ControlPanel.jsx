@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import BarcodeScanner from '../BarcodeScanner/BarcodeScanner'
 import BinLabel from '../BinLabel/BinLabel'
+import SkuSheet from '../SkuSheet/SkuSheet'
 
 const DEFAULT_FORM = { cols: 5, rows: 6, rotated: false }
 
@@ -13,12 +14,13 @@ const fmtTimestamp = (iso) => {
 
 function ControlPanel({
   visible, warehouses, racks, bins, skus,
-  selectedRackId, selectedBinId, placingRack,
+  selectedRackId, selectedRackIds = [], selectedBinId, placingRack, placingGroup,
   movingBinId,
   onUpdateWarehouseName,
   onStartPlaceRack, onCancelPlace,
   onUpdateRack, onDeleteRack, onMoveRack,
-  onSelectRack, onSelectBin,
+  onSelectRack, onClearRackGroup, onShiftRackGroup, onMoveRackGroup, onApplyRowLabel, onSelectRowGroup,
+  onSelectBin,
   onStartMoveBin, onMoveBin, onCancelMoveBin,
   onRequestDeleteBin,
   onAddSku, onRemoveSku, onUpdateSkuQty, onUpdateSkuLocation,
@@ -57,6 +59,9 @@ function ControlPanel({
   // Editable rack label (rackId) draft — committed on blur / Enter
   const [rackIdDraft, setRackIdDraft] = useState('')
   const [labelBin, setLabelBin] = useState(null)
+  const [showSkuSheet, setShowSkuSheet] = useState(false)
+  const [groupShift, setGroupShift] = useState({ dx: '0', dz: '0' })
+  const [groupRowLabel, setGroupRowLabel] = useState('')
   // Controlled inputs for bin box dimensions (in inches); synced to selected bin on navigation
   const [dimInputs, setDimInputs] = useState({ binW: '24', binD: '16', binH: '17' })
   const [poInputs, setPoInputs]   = useState({ poNumber: '', poDescription: '' })
@@ -736,6 +741,15 @@ function ControlPanel({
               </div>
             )}
 
+            {placingGroup && (
+              <div className="placing-status" style={{ borderColor: '#36c2d9', color: '#36c2d9' }}>
+                <span>
+                  Placing group of <strong>{placingGroup.items.length} racks</strong> — click the floor to drop
+                </span>
+                <button className="cancel-btn" style={{ color: '#36c2d9' }} onClick={onCancelPlace}>✕</button>
+              </div>
+            )}
+
             {movingBinId && !placingRack && (() => {
               const mb = bins.find(b => b.id === movingBinId)
               if (!mb?.displaced) return null
@@ -753,7 +767,7 @@ function ControlPanel({
               <button
                 className="btn-primary"
                 onClick={() => setAddingRack(true)}
-                disabled={!!placingRack}
+                disabled={!!placingRack || !!placingGroup}
               >
                 + Add Rack
               </button>
@@ -795,6 +809,72 @@ function ControlPanel({
               </form>
             )}
 
+            {selectedRackIds.length > 0 && (
+              <div className="rack-group-panel">
+                <div className="rack-group-header">
+                  <span>{selectedRackIds.length} racks selected</span>
+                  <button className="walk-link-btn" style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 12 }} onClick={onClearRackGroup}>
+                    Clear
+                  </button>
+                </div>
+                <p className="form-hint">
+                  cmd/ctrl+click a rack's name label to add or remove it from this group.
+                </p>
+
+                <button
+                  className="btn-primary"
+                  style={{ width: '100%', marginTop: 8 }}
+                  disabled={selectedRackIds.length < 2 || !!placingRack || !!placingGroup}
+                  onClick={onMoveRackGroup}
+                >
+                  📍 Pick Up Group — click floor to drop
+                </button>
+                <p className="form-hint" style={{ marginTop: 4 }}>
+                  Same gesture as moving one rack — the whole group moves together, spacing preserved. Press <kbd>W</kbd> with the group selected works too.
+                </p>
+
+                <div className="section-divider" style={{ margin: '10px 0' }} />
+
+                <p className="form-hint">Or nudge by an exact distance (e.g. a known 3 ft aisle):</p>
+                <div className="form-row" style={{ marginTop: 8 }}>
+                  <div className="form-field">
+                    <label>Shift X (ft)</label>
+                    <input type="number" value={groupShift.dx}
+                      onChange={e => setGroupShift(s => ({ ...s, dx: e.target.value }))} />
+                  </div>
+                  <div className="form-field">
+                    <label>Shift Z (ft)</label>
+                    <input type="number" value={groupShift.dz}
+                      onChange={e => setGroupShift(s => ({ ...s, dz: e.target.value }))} />
+                  </div>
+                </div>
+                <button
+                  className="btn-secondary"
+                  style={{ width: '100%', marginTop: 6 }}
+                  onClick={() => {
+                    onShiftRackGroup(Number(groupShift.dx) || 0, Number(groupShift.dz) || 0)
+                    setGroupShift({ dx: '0', dz: '0' })
+                  }}
+                >
+                  Nudge Group
+                </button>
+
+                <div className="form-field" style={{ marginTop: 10 }}>
+                  <label>Row label</label>
+                  <input type="text" placeholder="e.g. Row A" value={groupRowLabel}
+                    onChange={e => setGroupRowLabel(e.target.value)} />
+                </div>
+                <button
+                  className="btn-secondary"
+                  style={{ width: '100%', marginTop: 6 }}
+                  disabled={!groupRowLabel.trim()}
+                  onClick={() => onApplyRowLabel(groupRowLabel.trim())}
+                >
+                  Label Group "{groupRowLabel.trim() || '—'}"
+                </button>
+              </div>
+            )}
+
             <div className="section-divider" />
 
             <div className="stat-group">
@@ -820,6 +900,16 @@ function ControlPanel({
               {Object.keys(skuCatalog ?? {}).length > 0 ? '↻ Import NetSuite Quantities CSV' : '↑ Import NetSuite Quantities CSV'}
               <input type="file" accept=".csv" hidden onChange={handleCsvFile} />
             </label>
+            {Object.keys(skuCatalog ?? {}).length > 0 && (
+              <button
+                type="button"
+                className="btn-secondary"
+                style={{ width: '100%', marginTop: 8 }}
+                onClick={() => setShowSkuSheet(true)}
+              >
+                🖨 Print SKU Master Sheet
+              </button>
+            )}
             <p className="catalog-timestamp" style={{ marginTop: 10, marginBottom: 4 }}>
               Items CSV{netsuiteItemsUpdatedAt
                 ? `: ${fmtTimestamp(netsuiteItemsUpdatedAt)}`
@@ -909,6 +999,7 @@ function ControlPanel({
                   <span className="rack-view-dims">
                     {panelRack.cols} cols · {panelRack.rows} levels
                     {panelRack.rotated ? ' · rotated' : ''}
+                    {panelRack.row ? ` · ${panelRack.row}` : ''}
                   </span>
                 )}
               </div>
@@ -949,6 +1040,16 @@ function ControlPanel({
                 onClick={() => onUpdateRack(panelRack.id, { rotated: !panelRack.rotated })}
               >
                 ↻ {panelRack.rotated ? 'Rotated 90°' : 'Rotate 90°'}
+              </button>
+            )}
+
+            {panelRack?.row && (
+              <button
+                className="btn-secondary"
+                style={{ width: '100%', marginBottom: 12 }}
+                onClick={() => onSelectRowGroup(panelRack.row)}
+              >
+                Select all in "{panelRack.row}"
               </button>
             )}
 
@@ -998,7 +1099,7 @@ function ControlPanel({
                 </div>
                 <div
                   className="bin-grid"
-                  style={{ gridTemplateColumns: `repeat(${panelRack.cols}, 1fr)` }}
+                  style={{ gridTemplateColumns: `repeat(${panelRack.cols}, minmax(26px, 1fr))` }}
                 >
                   {buildRackCells().map(({ col, row, bin }) => {
                     const isSelected   = bin && bin.id === selectedBinId
@@ -1998,6 +2099,11 @@ function ControlPanel({
             setLabelBin(null)
           }}
         />
+      )}
+
+      {/* ── SKU master sheet print modal ─────────────────────────────────── */}
+      {showSkuSheet && (
+        <SkuSheet skuCatalog={skuCatalog} onClose={() => setShowSkuSheet(false)} />
       )}
 
     </aside>

@@ -31,7 +31,26 @@ function clearGroup(group) {
 // correct orientation directly. At rotated=false, columns run along Z (warehouse
 // depth). At rotated=true, columns run along X (warehouse width).
 // In both cases, group origin (0,0,0) = the min-X, min-Z, bottom corner of the footprint.
-function buildRackMesh(rack, ghost = false, selected = false) {
+const RACK_COLOR_DEFAULT  = 0x607080
+const RACK_COLOR_SELECTED = 0xffb020
+const RACK_COLOR_GROUP    = 0x36c2d9
+
+// Plain DOM mutation kept outside the effect body so the immutability lint rule
+// doesn't mistake writing to a CSS2DObject's backing <div> for mutating ref state.
+function applyRackLabelStyle(labelDiv, color, active) {
+  if (!labelDiv) return
+  const hex = '#' + color.toString(16).padStart(6, '0')
+  labelDiv.style.color = active ? hex : '#d7dde5'
+  labelDiv.style.borderColor = active ? hex : '#2a323d'
+}
+
+function applyDisplacedLabelStyle(labelDiv, isSelected) {
+  if (!labelDiv) return
+  labelDiv.style.color = isSelected ? '#1a1206' : '#fff8f0'
+  labelDiv.style.background = isSelected ? 'rgba(255,176,32,.95)' : 'rgba(160,60,10,.95)'
+}
+
+function buildRackMesh(rack, ghost = false, selected = false, groupSelected = false) {
   const cols = rack.cols
   const rows = rack.rows
   const bw = rack.binW ?? BIN.w
@@ -41,7 +60,7 @@ function buildRackMesh(rack, ghost = false, selected = false) {
   const totalY = rows * bh
   const s = 0.05  // post/rail cross-section thickness
 
-  let color = selected ? 0xffb020 : 0x607080
+  let color = groupSelected ? RACK_COLOR_GROUP : selected ? RACK_COLOR_SELECTED : RACK_COLOR_DEFAULT
   const mat = ghost
     ? new THREE.MeshLambertMaterial({ color: 0x4499ff, transparent: true, opacity: 0.35 })
     : new THREE.MeshLambertMaterial({ color })
@@ -228,24 +247,42 @@ function getExtents(rack) {
     : { extentX: bd, extentZ: rack.cols * bw }
 }
 
+// Overall bounding box of a rack group, in the same relX/relZ space the items
+// were stored with (min corner = origin) — used to snap/clamp the group as one.
+function getGroupExtents(items) {
+  let extentX = 0, extentZ = 0
+  for (const item of items) {
+    const { extentX: ex, extentZ: ez } = getExtents(item)
+    extentX = Math.max(extentX, item.relX + ex)
+    extentZ = Math.max(extentZ, item.relZ + ez)
+  }
+  return { extentX, extentZ }
+}
+
 function Canvas({
   warehouses = [],
   racks = [],
   bins = [],
   placingRack,
+  placingGroup,
   selectedRackId,
+  selectedRackIds = [],
   selectedBinId,
   movingBinId,
   onPlaceRack,
+  onPlaceRackGroup,
   onCancelPlace,
   onToggleRotation,
   onSelectRack,
+  onToggleRackGroup,
   onSelectBin,
   onMoveRack,
+  onMoveRackGroup,
   onUpdateRack,
   onMoveBin,
   onCancelMoveBin,
   onRequestDeleteBin,
+  onUndo,
   locationColors = {},
   rooms = [],
   selectedRoomId,
@@ -258,14 +295,19 @@ function Canvas({
 
   // Keep callbacks and latest state in refs so event handlers (set up once) always see fresh values
   const placingRackRef      = useRef(placingRack)
+  const placingGroupRef     = useRef(placingGroup)
   const onPlaceRackRef      = useRef(onPlaceRack)
+  const onPlaceRackGroupRef = useRef(onPlaceRackGroup)
   const onCancelPlaceRef    = useRef(onCancelPlace)
   const onToggleRotationRef = useRef(onToggleRotation)
   const onSelectRackRef     = useRef(onSelectRack)
+  const onToggleRackGroupRef = useRef(onToggleRackGroup)
   const onMoveRackRef       = useRef(onMoveRack)
+  const onMoveRackGroupRef  = useRef(onMoveRackGroup)
   const onUpdateRackRef     = useRef(onUpdateRack)
   const onSelectBinRef      = useRef(onSelectBin)
   const selectedRackIdRef   = useRef(selectedRackId)
+  const selectedRackIdsRef  = useRef(selectedRackIds)
   const racksRef            = useRef(racks)
   const binsRef             = useRef(bins)
   const movingBinRef          = useRef(movingBinId)
@@ -273,15 +315,21 @@ function Canvas({
   const onCancelMoveBinRef    = useRef(onCancelMoveBin)
   const selectedBinIdRef      = useRef(selectedBinId)
   const onRequestDeleteBinRef = useRef(onRequestDeleteBin)
+  const onUndoRef              = useRef(onUndo)
   useEffect(() => { placingRackRef.current      = placingRack },      [placingRack])
+  useEffect(() => { placingGroupRef.current     = placingGroup },     [placingGroup])
   useEffect(() => { onPlaceRackRef.current      = onPlaceRack },      [onPlaceRack])
+  useEffect(() => { onPlaceRackGroupRef.current = onPlaceRackGroup }, [onPlaceRackGroup])
   useEffect(() => { onCancelPlaceRef.current    = onCancelPlace },    [onCancelPlace])
   useEffect(() => { onToggleRotationRef.current = onToggleRotation }, [onToggleRotation])
   useEffect(() => { onSelectRackRef.current     = onSelectRack },     [onSelectRack])
+  useEffect(() => { onToggleRackGroupRef.current = onToggleRackGroup }, [onToggleRackGroup])
+  useEffect(() => { onMoveRackGroupRef.current  = onMoveRackGroup },  [onMoveRackGroup])
   useEffect(() => { onMoveRackRef.current       = onMoveRack },       [onMoveRack])
   useEffect(() => { onUpdateRackRef.current     = onUpdateRack },     [onUpdateRack])
   useEffect(() => { onSelectBinRef.current      = onSelectBin },      [onSelectBin])
   useEffect(() => { selectedRackIdRef.current   = selectedRackId },   [selectedRackId])
+  useEffect(() => { selectedRackIdsRef.current  = selectedRackIds },  [selectedRackIds])
   useEffect(() => { racksRef.current            = racks },            [racks])
   useEffect(() => { binsRef.current             = bins },             [bins])
   useEffect(() => { movingBinRef.current          = movingBinId },        [movingBinId])
@@ -289,6 +337,7 @@ function Canvas({
   useEffect(() => { onCancelMoveBinRef.current    = onCancelMoveBin },    [onCancelMoveBin])
   useEffect(() => { selectedBinIdRef.current      = selectedBinId },      [selectedBinId])
   useEffect(() => { onRequestDeleteBinRef.current = onRequestDeleteBin }, [onRequestDeleteBin])
+  useEffect(() => { onUndoRef.current              = onUndo },             [onUndo])
 
   const roomsRef          = useRef(rooms)
   const placingRoomRef    = useRef(placingRoom)
@@ -379,10 +428,11 @@ function Canvas({
 
     const onMouseMove = (e) => {
       const cfg = placingRackRef.current
+      const group = placingGroupRef.current
       const room = placingRoomRef.current
       const movingBin = movingBinRef.current
-      mount.style.cursor = (cfg || room || movingBin) ? 'crosshair' : 'default'
-      if (!cfg && !room) { ghostGroup.visible = false; return }
+      mount.style.cursor = (cfg || group || room || movingBin) ? 'crosshair' : 'default'
+      if (!cfg && !group && !room) { ghostGroup.visible = false; return }
 
       updateMouse(e)
       raycaster.setFromCamera(mouse, camera)
@@ -391,7 +441,9 @@ function Canvas({
 
       const hit = hits[0]
       const whIndex = hit.object.userData.whIndex
-      const activePlacing = placingRackRef.current || placingRoomRef.current
+      const activePlacing = group
+        ? (() => { const { extentX, extentZ } = getGroupExtents(group.items); return { roomW: extentX, roomD: extentZ } })()
+        : placingRackRef.current || placingRoomRef.current
       const { localX, localZ } = snapAndClamp(
         hit.point.x - whPos[whIndex], hit.point.z, activePlacing, whIndex
       )
@@ -411,6 +463,7 @@ function Canvas({
       raycaster.setFromCamera(mouse, camera)
 
       const cfg = placingRackRef.current
+      const group = placingGroupRef.current
       if (cfg) {
         // ── Place mode: drop rack on floor ──────────────────────────────────
         const hits = raycaster.intersectObjects(floorMeshes)
@@ -421,6 +474,17 @@ function Canvas({
           hit.point.x - whPos[whIndex], hit.point.z, cfg, whIndex
         )
         onPlaceRackRef.current?.(whIndex, localX, localZ)
+      } else if (group) {
+        // ── Group place mode: drop every rack in the group at once ──────────
+        const hits = raycaster.intersectObjects(floorMeshes)
+        if (!hits.length) return
+        const hit = hits[0]
+        const whIndex = hit.object.userData.whIndex
+        const { extentX, extentZ } = getGroupExtents(group.items)
+        const { localX, localZ } = snapAndClamp(
+          hit.point.x - whPos[whIndex], hit.point.z, { roomW: extentX, roomD: extentZ }, whIndex
+        )
+        onPlaceRackGroupRef.current?.(whIndex, localX, localZ)
       } else if (placingRoomRef.current) {
         const hits = raycaster.intersectObjects(floorMeshes)
         if (!hits.length) return
@@ -503,7 +567,11 @@ function Canvas({
       }
 
       if (e.key === 'w' || e.key === 'W') {
-        if (selectedRackIdRef.current && !placingRackRef.current) {
+        if (placingRackRef.current || placingGroupRef.current) {
+          // already placing something — ignore
+        } else if (selectedRackIdsRef.current.length > 1) {
+          onMoveRackGroupRef.current?.()
+        } else if (selectedRackIdRef.current) {
           onMoveRackRef.current?.(selectedRackIdRef.current)
         }
       }
@@ -513,6 +581,11 @@ function Canvas({
           e.preventDefault()
           onRequestDeleteBinRef.current?.(selectedBinIdRef.current)
         }
+      }
+
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault()
+        onUndoRef.current?.()
       }
 
       if (e.key === 'f' || e.key === 'F') {
@@ -587,6 +660,8 @@ function Canvas({
       scene, camera, renderer, labelRenderer, controls,
       racksGroup, ghostGroup, displacedGroup, roomsGroup, floorMeshes,
       warehouseLabelDivs, rackMeshMap: new Map(),
+      binMeshMap: new Map(), displacedMeshMap: new Map(),
+      selectedBinLabel: null,
       focusOnRack, whPos,
     }
 
@@ -613,14 +688,21 @@ function Canvas({
     })
   }, [warehouses])
 
-  // ── Effect 3: Rebuild rack meshes + bin boxes when anything changes ─────────
+  // ── Effect 3: Rebuild rack meshes + bin boxes ────────────────────────────────
+  // Deliberately excludes selection state from its deps — this is the expensive
+  // path (773+ individual meshes get disposed and recreated), so it should only
+  // run when the actual layout changes. Selection highlighting is handled by the
+  // cheap Effect 3b below, which just recolors already-built meshes in place.
   useEffect(() => {
-    const { racksGroup, displacedGroup, rackMeshMap } = threeRef.current
+    const { racksGroup, displacedGroup, rackMeshMap, binMeshMap, displacedMeshMap } = threeRef.current
     if (!racksGroup) return
 
     clearGroup(racksGroup)
     if (displacedGroup) clearGroup(displacedGroup)
     rackMeshMap?.clear()
+    binMeshMap?.clear()
+    displacedMeshMap?.clear()
+    threeRef.current.selectedBinLabel = null
 
     // Index bins by rackId for O(1) lookup — skip displaced bins (rendered separately)
     const binsByRack = {}
@@ -631,40 +713,30 @@ function Canvas({
     }
 
     for (const rack of racks) {
-      const isSelected = rack.id === selectedRackId
-      const mesh = buildRackMesh(rack, false, isSelected)
+      const mesh = buildRackMesh(rack, false, false, false)
       const rWhPos = (threeRef.current.whPos ?? WH_POS)[rack.whIndex]
       mesh.position.set(rWhPos + rack.localX, 0, rack.localZ)
       mesh.userData.rackId = rack.id
       racksGroup.add(mesh)
-      rackMeshMap?.set(rack.id, mesh)
+      // All posts/rails in a rack share one material instance — grab it once for cheap recoloring later
+      const rackMat = mesh.children[0]?.material ?? null
 
       // Bin boxes inside this rack
       const rackBins = binsByRack[rack.id] ?? []
       const occupiedSlots = new Set(rackBins.map(b => `${b.col}_${b.row}`))
 
       for (const bin of rackBins) {
-        const isSelected  = bin.id === selectedBinId
         const isMoving    = bin.id === movingBinId
         const hasContent  = (bin.skus ?? []).length > 0
         const locColor    = hasContent ? getBinLocColor(bin, locationColors) : null
-        const binMesh = buildBinMesh(bin, rack, isSelected, isMoving, hasContent, locColor)
+        const baseColor   = locColor ?? (hasContent ? 0x1a5cb8 : 0x444444)
+        const binMesh = buildBinMesh(bin, rack, false, isMoving, hasContent, locColor)
         binMesh.userData.binId    = bin.id
         binMesh.userData.binRackId = bin.rackId
         binMesh.userData.binCol   = bin.col
         binMesh.userData.binRow   = bin.row
         mesh.add(binMesh)
-
-        // Label floating above the selected bin
-        if (isSelected) {
-          const bh = rack.binH ?? BIN.h
-          const div = document.createElement('div')
-          div.textContent = bin.binId
-          div.style.cssText = "color:#1a1206;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:9px;font-weight:700;background:rgba(255,176,32,.95);padding:1px 5px;border-radius:3px;pointer-events:none;white-space:nowrap"
-          const lbl = new CSS2DObject(div)
-          lbl.position.set(0, bh / 2 + 0.15, 0)
-          binMesh.add(lbl)
-        }
+        binMeshMap?.set(bin.id, { mesh: binMesh, baseColor, binH: rack.binH ?? BIN.h })
       }
 
       // Empty slot placeholders — only visible when moving a bin, so user can click a target
@@ -684,14 +756,21 @@ function Canvas({
       const div = document.createElement('div')
       div.textContent = rack.rackId
       div.style.cssText = [
-        isSelected ? 'color:#ffb020;border-color:#ffb020' : 'color:#d7dde5;border-color:#2a323d',
+        'color:#d7dde5;border-color:#2a323d',
         "font-family:'Space Grotesk',system-ui,sans-serif",
         'font-size:11px;font-weight:600',
         'background:rgba(14,17,22,.85)',
         'padding:2px 8px;border-radius:3px;border:1px solid',
         'pointer-events:auto;cursor:pointer;white-space:nowrap',
       ].join(';')
-      div.addEventListener('click', () => onSelectRackRef.current?.(rack.id))
+      div.addEventListener('click', (e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey) {
+          e.stopPropagation()
+          onToggleRackGroupRef.current?.(rack.id)
+        } else {
+          onSelectRackRef.current?.(rack.id)
+        }
+      })
       div.addEventListener('dblclick', (e) => {
         e.stopPropagation()
         onSelectRackRef.current?.(rack.id)
@@ -700,6 +779,8 @@ function Canvas({
       const label = new CSS2DObject(div)
       label.position.set(extentX / 2, rack.rows * bh + 0.5, extentZ / 2)
       mesh.add(label)
+
+      rackMeshMap?.set(rack.id, { mesh, mat: rackMat, labelDiv: div })
     }
     // ── Displaced bins — rendered in the gap between warehouses (x≈0) ──────────
     if (displacedGroup) {
@@ -719,14 +800,14 @@ function Canvas({
           const x = (gridCol - (COLS - 1) / 2) * xSpacing
           const z = startZ + gridRow * zSpacing
 
-          const isSelected = bin.id === selectedBinId
           const isMoving   = bin.id === movingBinId
           const hasContent = (bin.skus ?? []).length > 0
           const dispLocColor = hasContent ? getBinLocColor(bin, locationColors) : null
+          const baseColor  = dispLocColor ?? 0xc0392b
 
           const geo = new THREE.BoxGeometry(BIN.d * 0.88, BIN.h * 0.88, BIN.w * 0.88)
           const mat = new THREE.MeshLambertMaterial({
-            color:       isSelected ? 0xffb020 : isMoving ? 0x4499ff : dispLocColor ?? 0xc0392b,
+            color:       isMoving ? 0x4499ff : baseColor,
             transparent: isMoving,
             opacity:     isMoving ? 0.5 : 1,
           })
@@ -735,12 +816,9 @@ function Canvas({
           mesh.userData.binId = bin.id
           displacedGroup.add(mesh)
 
-          const baseStyle = isSelected
-            ? 'color:#1a1206;background:rgba(255,176,32,.95)'
-            : 'color:#fff8f0;background:rgba(160,60,10,.95)'
           const lblDiv = document.createElement('div')
           lblDiv.style.cssText = [
-            baseStyle,
+            'color:#fff8f0;background:rgba(160,60,10,.95)',
             "font-family:'JetBrains Mono',ui-monospace,monospace",
             'font-size:8px;font-weight:700',
             'padding:2px 4px;border-radius:3px;pointer-events:none;white-space:nowrap;line-height:1.3',
@@ -758,6 +836,8 @@ function Canvas({
           const lbl = new CSS2DObject(lblDiv)
           lbl.position.set(0, BIN.h / 2 + 0.15, 0)
           mesh.add(lbl)
+
+          displacedMeshMap?.set(bin.id, { mesh, labelDiv: lblDiv, baseColor, isMoving })
         })
 
         // Zone header label
@@ -775,12 +855,53 @@ function Canvas({
           'pointer-events:none;white-space:nowrap',
         ].join(';')
         const zoneLbl = new CSS2DObject(zoneDiv)
-        const gridRows = Math.ceil(displacedBins.length / COLS)
         zoneLbl.position.set(0, BIN.h + 0.8, startZ - 1)
         displacedGroup.add(zoneLbl)
       }
     }
-  }, [racks, bins, selectedRackId, selectedBinId, movingBinId])
+  }, [racks, bins, movingBinId, locationColors])
+
+  // ── Effect 3b: Selection highlighting — cheap recolor, no rebuild ───────────
+  // Runs on every selection change (the common case: clicking bins/racks while
+  // browsing). Only mutates existing materials/labels via the maps built above.
+  useEffect(() => {
+    const { rackMeshMap, binMeshMap, displacedMeshMap } = threeRef.current
+    if (!rackMeshMap) return
+
+    for (const [id, { mat, labelDiv }] of rackMeshMap) {
+      const inGroup    = selectedRackIds.includes(id)
+      const isSelected = id === selectedRackId
+      const color = inGroup ? RACK_COLOR_GROUP : isSelected ? RACK_COLOR_SELECTED : RACK_COLOR_DEFAULT
+      mat?.color.setHex(color)
+      applyRackLabelStyle(labelDiv, color, inGroup || isSelected)
+    }
+
+    // Remove the previous selected-bin floating label (it moves with selection)
+    const prevLabel = threeRef.current.selectedBinLabel
+    if (prevLabel?.parent) prevLabel.element.remove()
+    threeRef.current.selectedBinLabel = null
+
+    for (const [id, { mesh, baseColor, binH }] of binMeshMap ?? []) {
+      const isSelected = id === selectedBinId
+      mesh.material.color.setHex(isSelected ? 0xffb020 : baseColor)
+      if (isSelected) {
+        const bin = bins.find(b => b.id === id)
+        const div = document.createElement('div')
+        div.textContent = bin?.binId ?? ''
+        div.style.cssText = "color:#1a1206;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:9px;font-weight:700;background:rgba(255,176,32,.95);padding:1px 5px;border-radius:3px;pointer-events:none;white-space:nowrap"
+        const lbl = new CSS2DObject(div)
+        lbl.position.set(0, binH / 2 + 0.15, 0)
+        mesh.add(lbl)
+        threeRef.current.selectedBinLabel = lbl
+      }
+    }
+
+    for (const [id, { mesh, labelDiv, baseColor, isMoving }] of displacedMeshMap ?? []) {
+      const isSelected = id === selectedBinId
+      mesh.material.color.setHex(isMoving ? 0x4499ff : isSelected ? 0xffb020 : baseColor)
+      applyDisplacedLabelStyle(labelDiv, isSelected)
+    }
+  }, [selectedRackId, selectedRackIds, selectedBinId, bins])
 
   // ── Effect 4: Rebuild ghost when placing config changes ─────────────────────
   useEffect(() => {
@@ -788,10 +909,17 @@ function Canvas({
     if (!ghostGroup) return
 
     clearGroup(ghostGroup)
-    if (mountRef.current) mountRef.current.style.cursor = (placingRack || placingRoom) ? 'crosshair' : 'default'
+    if (mountRef.current) mountRef.current.style.cursor = (placingRack || placingGroup || placingRoom) ? 'crosshair' : 'default'
 
     if (placingRack) {
       ghostGroup.add(buildRackMesh(placingRack, true))
+      ghostGroup.visible = false
+    } else if (placingGroup) {
+      for (const item of placingGroup.items) {
+        const ghostMesh = buildRackMesh(item, true)
+        ghostMesh.position.set(item.relX, 0, item.relZ)
+        ghostGroup.add(ghostMesh)
+      }
       ghostGroup.visible = false
     } else if (placingRoom) {
       const geo = new THREE.PlaneGeometry(placingRoom.roomW, placingRoom.roomD)
@@ -804,7 +932,7 @@ function Canvas({
     } else {
       ghostGroup.visible = false
     }
-  }, [placingRack, placingRoom])
+  }, [placingRack, placingGroup, placingRoom])
 
   // ── Effect 5: Rebuild room meshes ────────────────────────────────────────────
   useEffect(() => {

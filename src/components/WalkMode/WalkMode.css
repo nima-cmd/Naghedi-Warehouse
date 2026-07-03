@@ -274,6 +274,19 @@
   flex-shrink: 0;
 }
 
+.walk-delete-bin-btn {
+  background: none;
+  border: none;
+  color: #4a5a6a;
+  cursor: pointer;
+  font-size: 15px;
+  padding: 4px 2px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.walk-delete-bin-btn:hover { color: #e74c3c; }
+
 /* ── SKU section ── */
 
 .walk-sku-section {
@@ -569,6 +582,83 @@
   line-height: 1.5;
 }
 
+/* ── Needs Review (in Finder) ── */
+
+.walk-flagged-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.walk-flagged-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 10px 14px;
+  background: rgba(231, 76, 60, 0.08);
+  border: 1px solid rgba(231, 76, 60, 0.3);
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  min-height: 44px;
+}
+
+.walk-flagged-item:hover { background: rgba(231, 76, 60, 0.14); }
+
+.walk-flagged-note {
+  font-size: 11px;
+  color: #c9938c;
+}
+
+/* ── Flag for review (in Bin Detail) ── */
+
+.walk-flag-section {
+  padding: 10px 16px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.walk-flag-btn {
+  width: 100%;
+  padding: 10px 14px;
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  color: #5a6a7a;
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+.walk-flag-btn:hover { border-color: #e74c3c; color: #e74c3c; }
+
+.walk-flag-btn.flagged {
+  background: rgba(231, 76, 60, 0.1);
+  border: 1px solid rgba(231, 76, 60, 0.35);
+  color: #e74c3c;
+}
+
+.walk-flag-note {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14px;
+  padding: 10px 12px;
+  outline: none;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.walk-flag-note:focus { border-color: #e74c3c; }
+
 /* ── Rack Browser (in Finder) ── */
 
 .walk-rack-browser {
@@ -674,6 +764,7 @@
 }
 
 .walk-bin-cell {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -703,6 +794,18 @@
 .walk-bin-cell.empty:hover {
   background: rgba(255, 255, 255, 0.07);
   border-color: rgba(255, 176, 32, 0.3);
+}
+
+.walk-bin-cell.flagged {
+  border-color: rgba(231, 76, 60, 0.55);
+}
+
+.walk-bin-cell-flag {
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  font-size: 9px;
+  line-height: 1;
 }
 
 .walk-bin-cell-label {

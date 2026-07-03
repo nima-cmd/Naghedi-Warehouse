@@ -80,6 +80,29 @@ html, body, #root {
   min-width: 90px;
 }
 
+.topbar-undo {
+  padding: 7px 14px;
+  background: transparent;
+  color: #4a5a6a;
+  border: 1px solid #2a323d;
+  border-radius: 6px;
+  font-family: var(--sans);
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.topbar-undo:not(:disabled):hover {
+  color: var(--text);
+  border-color: #4a5a6a;
+}
+
+.topbar-undo:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 .topbar-save:disabled {
   opacity: 0.45;
   cursor: default;
@@ -134,7 +157,7 @@ html, body, #root {
 }
 
 .panel {
-  width: 340px;
+  width: 420px;
   background: var(--panel);
   border-left: 1px solid var(--border);
   display: flex;
@@ -147,7 +170,7 @@ html, body, #root {
 }
 
 .panel.hidden {
-  transform: translateX(340px);
+  transform: translateX(420px);
 }
 
 .panel-header {
@@ -245,6 +268,23 @@ html, body, #root {
   border-radius: 6px;
   font-size: 12px;
   color: var(--accent);
+}
+
+.rack-group-panel {
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  background: rgba(54, 194, 217, 0.08);
+  border: 1px solid rgba(54, 194, 217, 0.35);
+  border-radius: 6px;
+}
+
+.rack-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  color: #36c2d9;
 }
 
 .cancel-btn {
@@ -557,10 +597,13 @@ html, body, #root {
 .bin-grid {
   display: grid;
   gap: 3px;
+  overflow-x: auto;
+  padding-bottom: 4px;
 }
 
 .bin-cell {
   aspect-ratio: 1;
+  min-width: 26px;
   min-height: 26px;
   display: flex;
   align-items: center;
