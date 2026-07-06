@@ -4,7 +4,7 @@ import Canvas from './components/Canvas/Canvas'
 import ControlPanel from './components/ControlPanel/ControlPanel'
 import StagingPanel from './components/Staging/StagingPanel'
 import WalkMode from './components/WalkMode/WalkMode'
-import { loadLayout, saveLayout, loadCatalogData, saveCatalogData } from './services/airtable'
+import { loadLayout, saveLayout, loadCatalogData, saveCatalogData } from './services/supabase'
 import { parseCatalogCsv, loadCatalog, saveCatalog, saveLocationQtys, loadLocationQtys } from './services/catalog'
 import { loadNetsuiteItems, parseNetsuiteItemsCsv, saveNetsuiteItems } from './services/netsuiteItems'
 import {
@@ -200,8 +200,19 @@ function App() {
           ]).map(wh => ({ width: 25, depth: 100, ...wh })))  // back-compat: add dims to old saves
           // Force Canvas to remount with the loaded dimensions so the 3D view matches
           setDimChangeKey(k => k + 1)
-          setRacks(layout.racks ?? [])
-          setBins(layout.bins ?? [])
+          const loadedRacks = layout.racks ?? []
+          setRacks(loadedRacks)
+
+          // Compact saves (binsFromRacks: true) only store bins with data.
+          // Regenerate the full bin grid from rack definitions, then merge in
+          // any saved bins (which carry SKUs, flags, dims, displaced state).
+          if (layout.binsFromRacks) {
+            const allBins = loadedRacks.flatMap(r => generateBinsForRack(r))
+            const savedById = Object.fromEntries((layout.bins ?? []).map(b => [b.id, b]))
+            setBins(allBins.map(b => savedById[b.id] ? { ...b, ...savedById[b.id] } : b))
+          } else {
+            setBins(layout.bins ?? [])  // back-compat: old full saves
+          }
           setRackCounters(layout.rackCounters ?? { 0: 0, 1: 0 })
           setCatalogUpdatedAt(layout.catalogUpdatedAt ?? null)
           setConfirmedShortages(layout.confirmedShortages ?? {})
@@ -946,9 +957,13 @@ function App() {
     setSaveStatus('saving')
     setSaveError(null)
     try {
-      // skuCatalog is excluded — it's too large for Airtable's text field.
-      // It lives in localStorage and is restored from there on load.
-      const layout = { warehouses, racks, bins, rooms, rackCounters, catalogUpdatedAt, confirmedShortages }
+      // Only save bins that have actual data — empty bins are regenerated from
+      // rack definitions on load (binsFromRacks: true). This keeps the JSON
+      // well under Airtable's 100k character limit even with hundreds of bins.
+      const compactBins = bins.filter(b =>
+        (b.skus?.length > 0) || b.flagged || b.displaced || b.dims
+      )
+      const layout = { warehouses, racks, bins: compactBins, binsFromRacks: true, rooms, rackCounters, catalogUpdatedAt, confirmedShortages }
       const recordId = await saveLayout(layout, airtableRecordId.current)
       airtableRecordId.current = recordId
       setIsDirty(false)
