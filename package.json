@@ -11,6 +11,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.110.0",
     "@zxing/browser": "^0.2.0",
     "qrcode": "^1.5.4",
     "react": "^19.2.6",
