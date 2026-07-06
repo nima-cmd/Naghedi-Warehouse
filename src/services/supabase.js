@@ -125,57 +125,55 @@ export async function saveLayout(layoutData) {
     if (rackErr) throw new Error(rackErr.message)
   }
 
-  // 3 — Compute every bin ID that belongs to current racks
-  //     (same formula as generateBinsForRack in App.jsx)
-  const allBinIds = racks.flatMap(r =>
-    Array.from({ length: r.rows }, (_, row) =>
-      Array.from({ length: r.cols }, (_, col) => `${r.id}_c${col}_r${row}`)
-    ).flat()
-  )
-
-  // 4 — Non-empty bins (have SKUs, flags, or displaced state)
+  // 3 — Non-empty bins (have SKUs, flags, or displaced state)
   const nonEmptyBins = (bins ?? []).filter(b =>
     (b.skus?.length > 0) || b.flagged || b.displaced || b.dims
   )
 
-  if (nonEmptyBins.length > 0) {
-    const { error: binErr } = await supabase.from('bins').upsert(
-      nonEmptyBins.map(b => ({
-        id: b.id,
-        bin_id: b.binId,
-        rack_id: b.rackId,
-        col: b.col,
-        row: b.row,
-        flagged: b.flagged ?? false,
-        flag_note: b.flagNote ?? null,
-        displaced: b.displaced ?? false,
-        displaced_from: b.displacedFrom ?? null,
-      })),
-      { onConflict: 'id' }
-    )
-    if (binErr) throw new Error(binErr.message)
-  }
+  // 4 & 5 — Sync bins and bin_skus per rack.
+  //
+  // Why per-rack instead of one big operation:
+  // Supabase's REST API passes filters as URL query parameters. Sending 500+
+  // bin IDs in a single .in() filter produces a URL that exceeds the server's
+  // length limit and returns a 400 Bad Request. By looping over racks (15-20
+  // requests of ~30 items each) we stay well within limits.
+  //
+  // For each rack:
+  //   - Delete all existing bin rows for that rack (by rack_id column)
+  //   - Delete all existing bin_sku rows for that rack (by LIKE on bin_id prefix)
+  //   - Re-insert the non-empty bins and their SKUs
+  for (const rack of racks) {
+    const { error: binDelErr } = await supabase.from('bins').delete().eq('rack_id', rack.id)
+    if (binDelErr) throw new Error(`Bins delete (${rack.id}): ${binDelErr.message}`)
 
-  // 5 — Delete bins that are now empty so stale rows don't linger
-  const nonEmptyIds = new Set(nonEmptyBins.map(b => b.id))
-  const nowEmptyIds = allBinIds.filter(id => !nonEmptyIds.has(id))
-  if (nowEmptyIds.length > 0) {
-    const { error } = await supabase.from('bins').delete().in('id', nowEmptyIds)
-    if (error) throw new Error(error.message)
-  }
+    const { error: skuDelErr } = await supabase.from('bin_skus').delete().like('bin_id', `${rack.id}_%`)
+    if (skuDelErr) throw new Error(`Bin SKUs delete (${rack.id}): ${skuDelErr.message}`)
 
-  // 6 — Sync bin_skus: wipe and rewrite for all bins in these racks
-  //     This ensures removed SKUs don't stay in the database
-  if (allBinIds.length > 0) {
-    const { error: delErr } = await supabase.from('bin_skus').delete().in('bin_id', allBinIds)
-    if (delErr) throw new Error(delErr.message)
-  }
-  const allSkuRows = nonEmptyBins.flatMap(b =>
-    (b.skus ?? []).map(s => ({ bin_id: b.id, sku: s.sku, qty: s.qty ?? 0, location: s.location ?? null }))
-  )
-  if (allSkuRows.length > 0) {
-    const { error: skuErr } = await supabase.from('bin_skus').insert(allSkuRows)
-    if (skuErr) throw new Error(skuErr.message)
+    const rackBins = nonEmptyBins.filter(b => b.rackId === rack.id)
+    if (rackBins.length > 0) {
+      const { error: binInsErr } = await supabase.from('bins').insert(
+        rackBins.map(b => ({
+          id: b.id,
+          bin_id: b.binId,
+          rack_id: b.rackId,
+          col: b.col,
+          row: b.row,
+          flagged: b.flagged ?? false,
+          flag_note: b.flagNote ?? null,
+          displaced: b.displaced ?? false,
+          displaced_from: b.displacedFrom ?? null,
+        }))
+      )
+      if (binInsErr) throw new Error(`Bins insert (${rack.id}): ${binInsErr.message}`)
+
+      const skuRows = rackBins.flatMap(b =>
+        (b.skus ?? []).map(s => ({ bin_id: b.id, sku: s.sku, qty: s.qty ?? 0, location: s.location ?? null }))
+      )
+      if (skuRows.length > 0) {
+        const { error: skuInsErr } = await supabase.from('bin_skus').insert(skuRows)
+        if (skuInsErr) throw new Error(`Bin SKUs insert (${rack.id}): ${skuInsErr.message}`)
+      }
+    }
   }
 
   // 7 — App metadata (rooms, counters, confirmed shortages)
