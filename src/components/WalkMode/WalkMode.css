@@ -827,3 +827,27 @@
   font-weight: 600;
   line-height: 1;
 }
+
+/* ── Mini map ── */
+
+.walk-minimap-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  margin: 8px 0 4px;
+  border-radius: 6px;
+  background: #131c28;
+  border: 1px solid #2a3a4a;
+}
+
+.walk-map-toggle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  background: none;
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  padding: 3px 10px;
+  cursor: pointer;
+  min-height: 28px;
+}

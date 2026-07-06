@@ -1,6 +1,127 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import BarcodeScanner from '../BarcodeScanner/BarcodeScanner'
 import './WalkMode.css'
+
+// Matches Canvas.jsx BIN constant — each bin slot is 2 units wide, 4/3 units deep
+const BIN_W = 2
+const BIN_D = 4 / 3
+
+// 2D overhead map of the warehouse floor, drawn on an HTML5 Canvas.
+// The long axis of the warehouse (depth/Z) goes horizontal so it fits a phone screen.
+// Racks are shown as labeled blocks — tap any rack to open it.
+function WalkMiniMap({ warehouses, racks, browsedRackId, onOpenRack }) {
+  const canvasRef = useRef(null)
+  const hitTargets = useRef([])  // stores { rx, ry, rw, rh, rack } in CSS px for tap detection
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas || !warehouses.length) return
+    const ctx = canvas.getContext('2d')
+    const dpr = window.devicePixelRatio || 1
+
+    const SCALE   = 6   // CSS px per warehouse unit
+    const PAD     = 10  // padding inside the canvas
+    const MIN_D   = 14  // minimum rack depth in px (racks are thin in the Z direction)
+    const ROW_GAP = 20  // vertical gap between warehouses
+
+    // Calculate total canvas height and per-warehouse layout info
+    let totalH = PAD
+    const layouts = warehouses.map((wh, whIdx) => {
+      const whRacks = racks.filter(r => r.whIndex === whIdx)
+      if (!whRacks.length) return null
+      const floorH = wh.width * SCALE
+      const layout = { wh, whIdx, whRacks, yStart: totalH, floorH }
+      totalH += floorH + ROW_GAP
+      return layout
+    }).filter(Boolean)
+    totalH += PAD
+
+    const canvasW = Math.max(...warehouses.map(wh => wh.depth * SCALE + PAD * 2))
+
+    // Set physical canvas size (HiDPI) and CSS display size
+    canvas.width        = canvasW * dpr
+    canvas.height       = totalH  * dpr
+    canvas.style.width  = canvasW + 'px'
+    canvas.style.height = totalH  + 'px'
+    ctx.scale(dpr, dpr)
+    ctx.clearRect(0, 0, canvasW, totalH)
+
+    hitTargets.current = []
+
+    for (const { wh, whRacks, yStart, floorH } of layouts) {
+      // Warehouse floor
+      ctx.fillStyle   = '#1a2535'
+      ctx.strokeStyle = '#3a4e66'
+      ctx.lineWidth   = 1
+      ctx.fillRect(PAD, yStart, wh.depth * SCALE, floorH)
+      ctx.strokeRect(PAD, yStart, wh.depth * SCALE, floorH)
+
+      // Warehouse code label
+      ctx.fillStyle       = '#7a90a8'
+      ctx.font            = '10px system-ui, sans-serif'
+      ctx.textAlign       = 'left'
+      ctx.textBaseline    = 'top'
+      ctx.fillText(wh.code, PAD + 4, yStart + 3)
+
+      for (const rack of whRacks) {
+        const rotated = rack.rotated || false
+        const extX = rotated ? BIN_D : rack.cols * BIN_W  // rack footprint along X axis
+        const extZ = rotated ? rack.cols * BIN_W : BIN_D  // rack footprint along Z axis
+
+        // Map Z → horizontal (rx), X → vertical (ry).
+        // localZ and localX are centered: range -depth/2 to depth/2 and -width/2 to width/2.
+        const rx = PAD + (rack.localZ + wh.depth  / 2) * SCALE
+        const ry = yStart + (rack.localX + wh.width / 2) * SCALE
+        const rw = Math.max(MIN_D, extZ * SCALE)
+        const rh = Math.max(MIN_D, extX * SCALE)
+
+        const isActive = rack.id === browsedRackId
+        ctx.fillStyle   = isActive ? '#c8890f' : '#1e4a7a'
+        ctx.strokeStyle = isActive ? '#f6c040' : '#3a7ab5'
+        ctx.lineWidth   = isActive ? 2 : 1
+        ctx.fillRect(rx, ry, rw, rh)
+        ctx.strokeRect(rx, ry, rw, rh)
+
+        // Rack label — show R01 instead of WH1-R01 to save space
+        const shortId = rack.rackId.replace(/^WH\d+-?/, '')
+        ctx.fillStyle    = isActive ? '#1a1200' : '#c0d8f0'
+        ctx.font         = `bold ${Math.max(8, Math.min(11, rh * 0.45))}px system-ui, sans-serif`
+        ctx.textAlign    = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(shortId, rx + rw / 2, ry + rh / 2)
+
+        // Store hit target in CSS px for tap detection
+        hitTargets.current.push({ rx, ry, rw, rh, rack })
+      }
+    }
+  }, [warehouses, racks, browsedRackId])
+
+  const handleTap = (e) => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const rect = canvas.getBoundingClientRect()
+    const src   = e.changedTouches ? e.changedTouches[0] : e
+    const tapX  = src.clientX - rect.left
+    const tapY  = src.clientY - rect.top
+    for (const { rx, ry, rw, rh, rack } of hitTargets.current) {
+      if (tapX >= rx && tapX <= rx + rw && tapY >= ry && tapY <= ry + rh) {
+        onOpenRack(rack)
+        return
+      }
+    }
+  }
+
+  return (
+    <div className="walk-minimap-scroll">
+      <canvas
+        ref={canvasRef}
+        onClick={handleTap}
+        onTouchEnd={e => { e.preventDefault(); handleTap(e) }}
+        style={{ cursor: 'pointer', borderRadius: 6, display: 'block' }}
+      />
+    </div>
+  )
+}
 
 export default function WalkMode({
   warehouses = [],
@@ -33,6 +154,8 @@ export default function WalkMode({
   const [skuError, setSkuError] = useState('')
   const [recentBinIds, setRecentBinIds] = useState([])
   const [flagNoteInput, setFlagNoteInput] = useState('')
+
+  const [showMap, setShowMap] = useState(true)  // toggle between map and list in rack browser
 
   // Create rack form
   const [crWhIndex, setCrWhIndex] = useState(0)
@@ -215,13 +338,27 @@ export default function WalkMode({
           <div className="walk-rack-browser">
             <div className="walk-row-header">
               <span className="walk-label">Browse Racks</span>
-              <button
-                className="walk-link-btn"
-                onClick={() => { setView('create-rack'); setCrCreated(null); setCrRackId(suggestedRackId?.(crWhIndex) ?? '') }}
-              >
-                + New Rack
-              </button>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button className="walk-map-toggle" onClick={() => setShowMap(v => !v)}>
+                  {showMap ? 'List' : 'Map'}
+                </button>
+                <button
+                  className="walk-link-btn"
+                  onClick={() => { setView('create-rack'); setCrCreated(null); setCrRackId(suggestedRackId?.(crWhIndex) ?? '') }}
+                >
+                  + New Rack
+                </button>
+              </div>
             </div>
+
+            {showMap && racks.length > 0 && (
+              <WalkMiniMap
+                warehouses={warehouses}
+                racks={racks}
+                browsedRackId={browsedRackId}
+                onOpenRack={rack => { setBrowsedRackId(rack.id); setView('rack') }}
+              />
+            )}
 
             {racks.length === 0 && (
               <div className="walk-empty-msg">No racks yet — tap + New Rack to create one</div>
