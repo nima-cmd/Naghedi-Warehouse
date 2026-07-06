@@ -19,6 +19,20 @@ import { importPOsToAirtable, parsePOWarehouseViewCsv, savePOLineDataLocally, lo
 import { savePOLocationsLocally, loadPOLocations, generateNetSuiteExport, downloadCSV } from './services/exportGenerator'
 import './App.css'
 
+// Find the lowest rack number not already in use for a given warehouse code.
+// e.g. if WH1-R01, WH1-R02, WH1-R04 exist, returns 3 (fills the gap before going higher).
+function nextRackNumber(whCode, existingRacks) {
+  const used = new Set(
+    existingRacks
+      .filter(r => r.rackId?.startsWith(whCode + '-R'))
+      .map(r => parseInt(r.rackId.slice(whCode.length + 2), 10))
+      .filter(n => !isNaN(n))
+  )
+  let n = 1
+  while (used.has(n)) n++
+  return n
+}
+
 // Generate one bin record per rack slot.
 // Naming: WH1-R01-A1 = warehouse WH1, rack R01, column A (1st), level 1 (bottom)
 // This is the NetSuite-compatible bin naming format used throughout.
@@ -317,7 +331,7 @@ function App() {
       return
     }
 
-    const newCount = rackCounters[whIndex] + 1
+    const newCount = nextRackNumber(warehouses[whIndex].code, racks)
     const rackId = `${warehouses[whIndex].code}-R${String(newCount).padStart(2, '0')}`
     const newRack = {
       id: `rack_${Date.now()}`,
@@ -1116,6 +1130,12 @@ function App() {
           onCreateRack={handleCreateRackManual}
           onUpdateBin={handleUpdateBin}
           onRequestDeleteBin={handleRequestDeleteBin}
+          suggestedRackId={(whIndex) => {
+            const wh = warehouses[whIndex]
+            if (!wh) return ''
+            const n = nextRackNumber(wh.code, racks)
+            return `${wh.code}-R${String(n).padStart(2, '0')}`
+          }}
         />
       )}
 

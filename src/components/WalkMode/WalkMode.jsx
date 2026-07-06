@@ -17,6 +17,7 @@ export default function WalkMode({
   onCreateRack,
   onUpdateBin,
   onRequestDeleteBin,
+  suggestedRackId,
 }) {
   const [view, setView] = useState('finder')  // 'finder' | 'rack' | 'bin' | 'create-rack'
   const [activeBinId, setActiveBinId] = useState(null)
@@ -188,7 +189,7 @@ export default function WalkMode({
           {notFound && (
             <div className="walk-not-found">
               <span>No bin found — check the ID or create the rack first.</span>
-              <button className="walk-link-btn" onClick={() => { setView('create-rack'); setCrCreated(null) }}>
+              <button className="walk-link-btn" onClick={() => { setView('create-rack'); setCrCreated(null); setCrRackId(suggestedRackId?.(crWhIndex) ?? '') }}>
                 + Create Rack
               </button>
             </div>
@@ -216,7 +217,7 @@ export default function WalkMode({
               <span className="walk-label">Browse Racks</span>
               <button
                 className="walk-link-btn"
-                onClick={() => { setView('create-rack'); setCrCreated(null) }}
+                onClick={() => { setView('create-rack'); setCrCreated(null); setCrRackId(suggestedRackId?.(crWhIndex) ?? '') }}
               >
                 + New Rack
               </button>
@@ -513,7 +514,7 @@ export default function WalkMode({
               <select
                 className="walk-select"
                 value={crWhIndex}
-                onChange={e => setCrWhIndex(parseInt(e.target.value))}
+                onChange={e => { const i = parseInt(e.target.value); setCrWhIndex(i); setCrRackId(suggestedRackId?.(i) ?? '') }}
               >
                 {warehouses.map((wh, i) => (
                   <option key={wh.code} value={i}>{wh.code} — {wh.name}</option>
